@@ -67,6 +67,7 @@ class AudioWaveManager private constructor(private val context: Context)
         @Synchronized
         fun getInstance(context: Context): AudioWaveManager
         {
+            // Use application context to prevent memory leaks
             val appContext = context.applicationContext
 
             // Check if we have a valid instance that hasn't been garbage collected
