@@ -89,9 +89,63 @@ class UsbDeviceDiscovery(private val context: Context)
         }
         catch (error: Exception)
         {
-            Timber.e(error, "Error checking if device is audio device: ${device.deviceName}")
+            Timber.e(error, "Error checking if a device is an audio device: ${device.deviceName}")
         }
 
         return false
+    }
+
+    /**
+     * Get detailed information about a USB device.
+     *
+     * @param device The USB device
+     * @return A map containing detailed information about the device
+     */
+    fun getDeviceInfo(device: UsbDevice): Map<String, String>
+    {
+        val info = mutableMapOf<String, String>()
+
+        info["deviceName"] = device.deviceName
+        info["deviceId"] = device.deviceId.toString()
+        info["vendorID"] = device.vendorId.toString()
+
+        device.productName?.let { info["productName"] = it }
+        device.manufacturerName?.let { info["manufacturerName"] = it }
+
+        info["interfaceCount"] = device.interfaceCount.toString()
+
+        val interfaceInfo = StringBuilder()
+        for (i in 0 until device.interfaceCount)
+        {
+            val intf = device.getInterface(i)
+            interfaceInfo.append("Interface $i: class=${intf.interfaceClass}, ")
+            interfaceInfo.append("subclass=${intf.interfaceSubclass}, ")
+            interfaceInfo.append("endpoints=${intf.endpointCount}\n")
+        }
+
+        info["interfaces"] = interfaceInfo.toString()
+
+        return info
+    }
+
+    /**
+     * Get a list of all interface devices (not just audio devices).
+     *
+     * @return List of all connected USB devices
+     */
+    fun getAllConnectedDevices(): List<UsbDevice>
+    {
+        return usbManager.deviceList.values.toList()
+    }
+
+    /**
+     * Get the USB manager instance.
+     * This is useful for operations that need direct access to the USB system service.
+     *
+     * @return The USB manager
+     */
+    fun getUsbManager(): UsbManager
+    {
+        return usbManager
     }
 }
