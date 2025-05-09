@@ -1,7 +1,6 @@
 package org.operatorfoundation.audiowave.utils
 import org.operatorfoundation.audiowave.exception.AudioException
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.flow
 import timber.log.Timber
 
@@ -126,9 +125,9 @@ object ErrorHandler
      */
     inline fun <T> runCatching(block: () -> T): Result<T>
     {
-        return try {
-            Result.success(block())
-        } catch (e: Throwable) {
+        return try { Result.success(block()) }
+        catch (e: Throwable)
+        {
             handleException(e) // Log the error appropriately
             Result.failure(e)
         }
@@ -141,9 +140,9 @@ object ErrorHandler
      * @return A flow that emits the result or handles the exception
      */
     fun <T> flowCatching(block: () -> T): Flow<T> = flow {
-        try {
-            emit(block())
-        } catch (e: Throwable) {
+        try { emit(block()) }
+        catch (e: Throwable)
+        {
             handleException(e) // Log the error appropriately
             throw e // Re-throw to be caught by the downstream catch operator
         }
@@ -155,10 +154,11 @@ object ErrorHandler
      * @param block The function to execute
      * @return A result containing either the success value or the failure exception
      */
-    inline fun <T, R> T.runCatching(block: T.() -> R): Result<R> {
-        return try {
-            Result.success(block())
-        } catch (e: Throwable) {
+    inline fun <T, R> T.runCatching(block: T.() -> R): Result<R>
+    {
+        return try { Result.success(block()) }
+        catch (e: Throwable)
+        {
             handleException(e) // Log the error appropriately
             Result.failure(e)
         }
