@@ -26,7 +26,7 @@ class AudioProcessor
      * @param audioData Raw audio data to process
      * @return Processed audio data
      */
-    fun processAudioData(audioData: ByteArray): ByteArray
+    fun processAudio(audioData: ByteArray): ByteArray
     {
         return ErrorHandler.runCatching {
             // If no effects are active, return the original data
@@ -74,7 +74,8 @@ class AudioProcessor
      */
     fun createAudioProcessingStream(): Flow<ByteArray> = flow {
         // TODO: Implementation to handle continuous stream processing
-        // This is a placeholder that could be implemented based on specific streaming requirements
+        // This could be implemented based on specific streaming requirements
+        Timber.e("createAudioProcessingStream() is not implemented. Ignoring.")
     }
 
     /**
@@ -117,7 +118,7 @@ class AudioProcessor
      * @param effect The effect to add
      * @return This AudioProcessor instance for method chaining
      */
-    fun addEffect(effect: Effect): AudioProcessor
+    fun add(effect: Effect): AudioProcessor
     {
         if (!effects.contains(effect))
         {
@@ -133,7 +134,7 @@ class AudioProcessor
      * @param effectId The ID of the effect to remove
      * @return This AudioProcessor instance for method chaining
      */
-    fun removeEffect(effectID: String): AudioProcessor
+    fun remove(effectID: String): AudioProcessor
     {
         val sizeBefore = effects.size
         effects.removeIf { it.id == effectID }

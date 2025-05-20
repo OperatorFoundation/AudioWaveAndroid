@@ -1,12 +1,13 @@
 package org.operatorfoundation.audiowave.utils
 
 import timber.log.Timber
-import kotlin.math.min
 
 /**
  * Utility class for validating audio processing parameters with clear error messages.
  *
- * This class provides methods to validate and constrain parameter values commonly used in audio processing.
+ * This class provides methods to validate and constrain parameter values
+ * commonly used in audio processing, such as ensuring values are within
+ * specific ranges or meet certain criteria.
  *
  * Example usage:
  * ```
@@ -16,16 +17,17 @@ import kotlin.math.min
  */
 object ParameterValidator
 {
+
     /**
-     * Validate that a value falls within a specified range, constraining if necessary
+     * Validate that a value falls within a specified range, constraining it if necessary.
      *
      * @param value The value to validate
      * @param min The minimum allowed value
      * @param max The maximum allowed value
      * @param paramName The name of the parameter (for logging)
-     * @return The validated value, constrained to the specific range
+     * @return The validated value, constrained to the specified range
      */
-    fun validateOrConstrainToRange(value: Float, min: Float, max: Float, paramName: String): Float
+    fun validateRange(value: Float, min: Float, max: Float, paramName: String): Float
     {
         val limitedValue = AudioUtils.limit(value, min, max)
         if (limitedValue != value) {
@@ -41,9 +43,9 @@ object ParameterValidator
      * @param paramName The name of the parameter (for logging)
      * @return The validated value, set to zero if it was negative
      */
-    fun validateOrConstrainNonNegative(value: Float, paramName: String): Float
+    fun validateNonNegative(value: Float, paramName: String): Float
     {
-        return validateOrConstrainToRange(value, 0f, Float.MAX_VALUE, paramName)
+        return validateRange(value, 0f, Float.MAX_VALUE, paramName)
     }
 
     /**
@@ -53,23 +55,23 @@ object ParameterValidator
      * @param paramName The name of the parameter (for logging)
      * @return The validated value, set to a small positive value if it was zero or negative
      */
-    fun validateOrConstrainToPositive(value: Float, paramName: String): Float
+    fun validatePositive(value: Float, paramName: String): Float
     {
-        val minValue = 0.00001f
-        return validateOrConstrainToRange(value, minValue, Float.MAX_VALUE, paramName)
+        val minValue = 0.00001f  // Small positive value
+        return validateRange(value, minValue, Float.MAX_VALUE, paramName)
     }
 
     /**
-     * Validate that a value is between 0.0 and 1.0, constraining if necessary.
+     * Validate that a value is between 0.0 and 1.0, constraining it if necessary.
      * Useful for parameters representing percentages or normalized values.
      *
      * @param value The value to validate
      * @param paramName The name of the parameter (for logging)
      * @return The validated value, constrained to the range [0.0, 1.0]
      */
-    fun validateOrConstrainToNormalized(value: Float, paramName: String): Float
+    fun validateNormalized(value: Float, paramName: String): Float
     {
-        return validateOrConstrainToRange(value, 0f, 1f, paramName)
+        return validateRange(value, 0f, 1f, paramName)
     }
 
     /**
@@ -78,15 +80,19 @@ object ParameterValidator
      * @param array The array to validate
      * @param expectedLength The expected length of the array
      * @param paramName The name of the parameter (for logging)
-     * @return True if the array length matches the expected length, false otherwise
+     * @return Result with value true if valid, or failure with error message if invalid
      */
-    fun validateArrayLength(array: Array<*>, expectedLength: Int, paramName: String): Boolean
+    fun validateArrayLength(array: Array<*>, expectedLength: Int, paramName: String): Result<Boolean>
     {
-        val isValid = array.size == expectedLength
-        if (!isValid) {
-            Timber.w("$paramName has invalid length ${array.size}, expected $expectedLength")
+        return ErrorHandler.runCatching {
+            val isValid = array.size == expectedLength
+            if (!isValid) {
+                Timber.w("$paramName has invalid length ${array.size}, expected $expectedLength")
+                throw IllegalArgumentException("$paramName has invalid length ${array.size}, expected $expectedLength")
+            }
+
+            isValid
         }
-        return isValid
     }
 
     /**
@@ -100,10 +106,12 @@ object ParameterValidator
      */
     fun <T> validateAllowedValue(value: T, allowedValues: Set<T>, paramName: String, defaultValue: T): T
     {
-        if (value !in allowedValues) {
+        if (value !in allowedValues)
+        {
             Timber.w("$paramName value $value is not allowed. Using default value $defaultValue")
             return defaultValue
         }
+
         return value
     }
 }

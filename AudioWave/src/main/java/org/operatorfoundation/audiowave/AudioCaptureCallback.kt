@@ -4,8 +4,9 @@ package org.operatorfoundation.audiowave
  * Callback interface for receiving audio data from the AudioWave library.
  *
  * This interface provides callbacks for both raw audio data captured from the USB device
- * and decoded data if a decoder is active. Implement this interface to receive
- * and process audio data in your application.
+ * and decoded data if a decoder is active.
+ *
+ * Note: For reactive programming, consider using the Flow-based API instead.
  *
  * Example implementation:
  * ```
@@ -29,27 +30,6 @@ package org.operatorfoundation.audiowave
  *
  *         // Example: Process decoded signal data
  *         processDecodedSignal(data)
- *     }
- *
- *     private fun calculateAudioLevel(data: ByteArray): Float {
- *         // Calculate RMS audio level
- *         var sum = 0.0
- *         var count = 0
- *
- *         for (i in 0 until data.size - 1 step 2) {
- *             if (i + 1 < data.size) {
- *                 // Convert two bytes to a 16-bit sample
- *                 val sample = (data[i + 1].toInt() shl 8) or (data[i].toInt() and 0xFF)
- *                 sum += sample * sample
- *                 count++
- *             }
- *         }
- *
- *         if (count == 0) return 0f
- *
- *         val rms = Math.sqrt(sum / count)
- *         // Normalize to 0.0 - 1.0 range (16-bit audio has range -32768 to 32767)
- *         return (rms / 32768.0).toFloat()
  *     }
  * }
  * ```
