@@ -63,4 +63,22 @@ sealed class AudioException(message: String, cause: Throwable? = null) : Excepti
     class ResourceUnavailableException(message: String) :
         AudioException(message)
 
+    /**
+     * Thrown when there is an issue configuring a device.
+     */
+    class DeviceConfigurationException(message: String, cause: Throwable? = null) :
+        AudioException(message, cause)
+
+    /**
+     * Thrown when an invalid operation is attempted.
+     */
+    class InvalidOperationException(message: String, cause: Throwable? = null) :
+        AudioException(message, cause)
+
+    /**
+     * Thrown when a required feature is not supported.
+     */
+    class UnsupportedFeatureException(message: String, cause: Throwable? = null) :
+        AudioException(message, cause)
+
 }

@@ -141,7 +141,7 @@ class RadioWaveDecoder : AudioDecoder
     {
         // FM demodulation by calculating phase differences
         val result = ShortArray(samples.size)
-        val prevPhase = 0.0
+        var prevPhase = 0.0
 
         // First apply bandpass filter around center frequency
         val bandpassFilter = bandwidth * 1000 / 2

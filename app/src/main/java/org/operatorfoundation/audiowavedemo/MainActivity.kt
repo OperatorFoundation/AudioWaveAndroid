@@ -1,29 +1,47 @@
 package org.operatorfoundation.audiowavedemo
 
+import android.Manifest
 import android.content.pm.PackageManager
 import android.hardware.usb.UsbDevice
 import android.os.Bundle
-import android.Manifest
-import android.view.View
-import android.widget.AdapterView
-import android.widget.ArrayAdapter
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
-import androidx.lifecycle.ViewModelProvider
-import androidx.navigation.NavController
-import androidx.navigation.findNavController
-import androidx.navigation.ui.AppBarConfiguration
-import androidx.navigation.ui.setupWithNavController
+import androidx.lifecycle.lifecycleScope
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.rememberNavController
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.operatorfoundation.audiowave.AudioCaptureCallback
 import org.operatorfoundation.audiowave.AudioWaveManager
-import com.google.android.material.bottomnavigation.BottomNavigationView
+import org.operatorfoundation.audiowave.Effect
+import org.operatorfoundation.audiowavedemo.ui.DeviceScreen
+import org.operatorfoundation.audiowavedemo.ui.ProcessingScreen
+import org.operatorfoundation.audiowavedemo.ui.theme.AudioWaveDemoTheme
+import timber.log.Timber
 
 class MainActivity : ComponentActivity(), AudioCaptureCallback {
-    private lateinit var navController: NavController
     private lateinit var audioWaveManager: AudioWaveManager
-    private lateinit var viewModel: AudioViewModel
+    private var connectedDevices by mutableStateOf<List<UsbDevice>>(emptyList())
+    private var connectedDevice by mutableStateOf<UsbDevice?>(null)
+    private var isProcessingActive by mutableStateOf(false)
+    private var audioLevel by mutableStateOf(0f)
+    private var availableDecoders by mutableStateOf<List<String>>(emptyList())
+    private var activeDecoder by mutableStateOf<String?>(null)
+    private var decodedData by mutableStateOf<ByteArray?>(null)
+    private var activeEffects by mutableStateOf<List<Effect>>(emptyList())
 
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -42,50 +60,142 @@ class MainActivity : ComponentActivity(), AudioCaptureCallback {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_main)
-
-        // Initialize ViewModel
-        viewModel = ViewModelProvider(this)[AudioViewModel::class.java]
 
         // Initialize AudioWave library
         audioWaveManager = AudioWaveManager.getInstance(applicationContext)
         audioWaveManager.setAudioCaptureCallback(this)
 
-        // Set up navigation
-        val navView: BottomNavigationView = findViewById(R.id.nav_view)
-        navController = findNavController(R.id.nav_host_fragment)
-        val appBarConfiguration = AppBarConfiguration(
-            setOf(R.id.navigation_device, R.id.navigation_processing)
-        )
-        // ComponentActivity doesn't have ActionBar by default, so we skip setupActionBarWithNavController
-        navView.setupWithNavController(navController)
-
         // Check for required permissions
         if (!hasRequiredPermissions()) {
             requestPermissions()
+        } else {
+            // Initialize AudioWave library
+            initializeAudioWave()
         }
 
-        // Initialize AudioWave library
-        initializeAudioWave()
+        // Set up audio data collection
+        setupAudioDataCollection()
+
+        setContent {
+            AudioWaveDemoTheme {
+                val navController = rememberNavController()
+
+                Scaffold(
+                    bottomBar = {
+                        NavigationBar {
+                            NavigationBarItem(
+                                selected = navController.currentBackStackEntry?.destination?.route == "devices",
+                                onClick = { navController.navigate("devices") {
+                                    popUpTo("devices") { inclusive = true }
+                                }},
+                                icon = { Icon(imageVector = Icons.Default.Home,
+                                    contentDescription = "Devices") },
+                                label = { Text("Devices") }
+                            )
+
+                            NavigationBarItem(
+                                selected = navController.currentBackStackEntry?.destination?.route == "processing",
+                                onClick = { navController.navigate("processing") {
+                                    popUpTo("devices")
+                                }},
+                                icon = { Icon(imageVector = Icons.Default.PlayArrow,
+                                    contentDescription = "Processing") },
+                                label = { Text("Processing") }
+                            )
+                        }
+                    }
+                ) { paddingValues ->
+                    NavHost(
+                        navController = navController,
+                        startDestination = "devices",
+                        modifier = Modifier.padding(paddingValues)
+                    ) {
+                        composable("devices") {
+                            DeviceScreen(
+                                connectedDevices = connectedDevices,
+                                onDeviceSelected = { connectToDevice(it) },
+                                onRefreshRequested = { initializeAudioWave() },
+                                isConnected = connectedDevice != null,
+                                currentDeviceName = connectedDevice?.deviceName ?: "",
+                                isProcessingActive = isProcessingActive,
+                                onNavigateToProcessing = { navController.navigate("processing") }
+                            )
+                        }
+
+                        composable("processing") {
+                            ProcessingScreen(
+                                isConnected = connectedDevice != null,
+                                isProcessingActive = isProcessingActive,
+                                onStartCapture = { startAudioCapture() },
+                                onStopCapture = { stopAudioCapture() },
+                                audioLevel = audioLevel,
+                                availableDecoders = listOf("None (Raw Audio)") + availableDecoders,
+                                activeDecoder = activeDecoder,
+                                onDecoderSelected = { setDecoder(it) },
+                                activeEffects = activeEffects,
+                                onEffectAdded = { addEffect(it) },
+                                onEffectRemoved = { removeEffect(it) },
+                                onNavigateToDevices = { navController.navigate("devices") }
+                            )
+                        }
+                    }
+                }
+            }
+        }
     }
 
-    private fun initializeAudioWave() {
-        audioWaveManager.initialize { success ->
-            runOnUiThread {
-                if (success) {
-                    // Update the available devices
-                    viewModel.updateConnectedDevices(audioWaveManager.getConnectedDevices())
-
-                    // Update available decoders
-                    viewModel.updateAvailableDecoders(audioWaveManager.getAvailableDecoders())
-                } else {
+    private fun setupAudioDataCollection() {
+        lifecycleScope.launch {
+            try {
+                // Collect from the audio flow
+                audioWaveManager.captureFlow().collect { audioData ->
+                    // Update audio level meter
+                    val level = calculateAudioLevel(audioData)
+                    Timber.d("Received audio data, level: $level")
+                    // Update the state on the main thread
+                    withContext(Dispatchers.Main) {
+                        audioLevel = level
+                    }
+                }
+            } catch (e: Exception) {
+                Timber.e(e, "Error collecting audio data")
+                // Show a toast with the error
+                withContext(Dispatchers.Main) {
                     Toast.makeText(
-                        this,
-                        "Failed to initialize AudioWave library",
+                        this@MainActivity,
+                        "Error collecting audio data: ${e.message}",
                         Toast.LENGTH_SHORT
                     ).show()
                 }
             }
+        }
+    }
+
+    fun initializeAudioWave() {
+        lifecycleScope.launch {
+            audioWaveManager.initialize().fold(
+                onSuccess = {
+                    // Update the available devices
+                    connectedDevices = audioWaveManager.getConnectedDevices()
+
+                    // Update available decoders
+                    availableDecoders = audioWaveManager.getAvailableDecoders()
+
+                    // Update active effects
+                    activeEffects = audioWaveManager.getActiveEffects()
+
+                    Timber.d("AudioWave initialized, found ${connectedDevices.size} devices")
+                },
+                onFailure = { error ->
+                    Toast.makeText(
+                        this@MainActivity,
+                        "Failed to initialize AudioWave library: ${error.message}",
+                        Toast.LENGTH_SHORT
+                    ).show()
+
+                    Timber.e(error, "Failed to initialize AudioWave")
+                }
+            )
         }
     }
 
@@ -102,63 +212,140 @@ class MainActivity : ComponentActivity(), AudioCaptureCallback {
     }
 
     fun connectToDevice(device: UsbDevice) {
-        audioWaveManager.openDevice(device) { success ->
-            runOnUiThread {
-                if (success) {
-                    viewModel.setConnectedDevice(device)
-                    Toast.makeText(this, "Connected to device", Toast.LENGTH_SHORT).show()
-                } else {
-                    Toast.makeText(this, "Failed to connect to device", Toast.LENGTH_SHORT).show()
+        lifecycleScope.launch {
+            // Use the updated API with startCapture
+            audioWaveManager.startCapture(device).fold(
+                onSuccess = {
+                    connectedDevice = device
+                    isProcessingActive = true
+
+                    Toast.makeText(
+                        this@MainActivity,
+                        "Connected to device and started capture",
+                        Toast.LENGTH_SHORT
+                    ).show()
+
+                    Timber.d("Connected to device: ${device.deviceName}")
+                },
+                onFailure = { error ->
+                    Toast.makeText(
+                        this@MainActivity,
+                        "Failed to connect to device: ${error.message}",
+                        Toast.LENGTH_SHORT
+                    ).show()
+
+                    Timber.e(error, "Failed to connect to device")
                 }
-            }
+            )
         }
     }
 
     fun startAudioCapture() {
-        val device = viewModel.connectedDevice.value ?: return
+        val device = connectedDevice ?: return
 
-        audioWaveManager.startCapture(device) { success ->
-            runOnUiThread {
-                if (success) {
-                    viewModel.setProcessingActive(true)
-                    Toast.makeText(this, "Audio capture started", Toast.LENGTH_SHORT).show()
-                } else {
-                    Toast.makeText(this, "Failed to start audio capture", Toast.LENGTH_SHORT).show()
+        lifecycleScope.launch {
+            audioWaveManager.startCapture(device).fold(
+                onSuccess = {
+                    isProcessingActive = true
+
+                    Toast.makeText(
+                        this@MainActivity,
+                        "Audio capture started",
+                        Toast.LENGTH_SHORT
+                    ).show()
+
+                    Timber.d("Audio capture started")
+                },
+                onFailure = { error ->
+                    Toast.makeText(
+                        this@MainActivity,
+                        "Failed to start audio capture: ${error.message}",
+                        Toast.LENGTH_SHORT
+                    ).show()
+
+                    Timber.e(error, "Failed to start audio capture")
                 }
-            }
+            )
         }
     }
 
     fun stopAudioCapture() {
-        audioWaveManager.stopCapture { success ->
-            runOnUiThread {
-                if (success) {
-                    viewModel.setProcessingActive(false)
-                    Toast.makeText(this, "Audio capture stopped", Toast.LENGTH_SHORT).show()
-                } else {
-                    Toast.makeText(this, "Failed to stop audio capture", Toast.LENGTH_SHORT).show()
+        lifecycleScope.launch {
+            audioWaveManager.stopCapture().fold(
+                onSuccess = {
+                    isProcessingActive = false
+
+                    Toast.makeText(
+                        this@MainActivity,
+                        "Audio capture stopped",
+                        Toast.LENGTH_SHORT
+                    ).show()
+
+                    Timber.d("Audio capture stopped")
+                },
+                onFailure = { error ->
+                    Toast.makeText(
+                        this@MainActivity,
+                        "Failed to stop audio capture: ${error.message}",
+                        Toast.LENGTH_SHORT
+                    ).show()
+
+                    Timber.e(error, "Failed to stop audio capture")
                 }
-            }
+            )
         }
     }
 
     fun setDecoder(decoderId: String) {
-        audioWaveManager.setDecoder(decoderId)
-        viewModel.setActiveDecoder(decoderId)
+        if (decoderId == "None (Raw Audio)") {
+            // No decoder selected
+            activeDecoder = null
+        } else {
+            audioWaveManager.setDecoder(decoderId)
+            activeDecoder = decoderId
+
+            Timber.d("Set decoder to: $decoderId")
+        }
     }
 
+    fun addEffect(effect: Effect) {
+        audioWaveManager.addEffect(effect)
+        // Update the list of active effects
+        activeEffects = audioWaveManager.getActiveEffects()
+
+        Toast.makeText(
+            this,
+            "Added effect: ${effect.name}",
+            Toast.LENGTH_SHORT
+        ).show()
+    }
+
+    fun removeEffect(effectId: String) {
+        audioWaveManager.removeEffect(effectId)
+        // Update the list of active effects
+        activeEffects = audioWaveManager.getActiveEffects()
+
+        Toast.makeText(
+            this,
+            "Removed effect: $effectId",
+            Toast.LENGTH_SHORT
+        ).show()
+    }
+
+    // From AudioCaptureCallback interface
     override fun onAudioDataCaptured(data: ByteArray) {
         // Update audio level meter on UI thread
         val level = calculateAudioLevel(data)
         runOnUiThread {
-            viewModel.setAudioLevel(level)
+            audioLevel = level
         }
     }
 
+    // From AudioCaptureCallback interface
     override fun onAudioDataDecoded(data: ByteArray) {
         // Process decoded data
         runOnUiThread {
-            viewModel.setDecodedData(data)
+            decodedData = data
         }
     }
 
@@ -185,6 +372,8 @@ class MainActivity : ComponentActivity(), AudioCaptureCallback {
 
     override fun onDestroy() {
         super.onDestroy()
-        audioWaveManager.release()
+        lifecycleScope.launch {
+            audioWaveManager.release()
+        }
     }
 }

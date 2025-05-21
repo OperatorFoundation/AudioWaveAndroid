@@ -2,66 +2,36 @@ package org.operatorfoundation.audiowave
 
 import android.content.Context
 import android.hardware.usb.UsbDevice
+import android.hardware.usb.UsbManager
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
+import org.operatorfoundation.audiowave.decoder.AudioDecoder
+import org.operatorfoundation.audiowave.decoder.DecoderRegistry
 import org.operatorfoundation.audiowave.exception.AudioException
 import org.operatorfoundation.audiowave.threading.AudioThreadManager
+import org.operatorfoundation.audiowave.usb.UsbAudioCapture
 import org.operatorfoundation.audiowave.usb.UsbDeviceDiscovery
 import org.operatorfoundation.audiowave.usb.UsbPermissionManager
 import org.operatorfoundation.audiowave.utils.ErrorHandler
 import timber.log.Timber
 import java.lang.ref.WeakReference
-import java.util.concurrent.Executors
 
 /**
  * AudioWave - A library for processing USB audio input with support for
  * various audio processing and decoding capabilities.
  *
- * This is the main entry point for the AudioWave library. It provides an API
- * for discovering and connecting USB audio devices, capturing audio data,
+ * This is the main entry point for the AudioWave library. It provides a simple API
+ * for discovering and connecting to USB audio devices, capturing audio data,
  * processing it with effects, and decoding it with various decoders.
- *
- * Usage example with coroutines and modern Kotlin features:
- * ```
- * // Initialize the library
- * val audioWave = AudioWaveManager.getInstance(context)
- * lifecycleScope.launch {
- *     audioWave.initialize().fold(
- *         onSuccess = {
- *             // Get connected devices
- *             val devices = audioWave.getConnectedDevices()
- *
- *             // Connect to the first device
- *             if (devices.isNotEmpty()) {
- *                 audioWave.startCapture(devices[0]).fold(
- *                     onSuccess = {
- *                         // Started capturing audio
- *                     },
- *                     onFailure = { error ->
- *                         // Handle capture start error
- *                         showErrorMessage(ErrorHandler.getErrorMessage(error))
- *                     }
- *                 )
- *             }
- *         },
- *         onFailure = { error ->
- *             // Handle initialization error
- *             showErrorMessage(ErrorHandler.getErrorMessage(error))
- *         }
- *     )
- * }
- *
- * // Set a callback to receive audio data
- * audioWave.captureFlow().collect { audioData ->
- *     // Process the audio data
- *     processAudioData(audioData)
- * }
- * ```
  */
-
 class AudioWaveManager private constructor(private val context: Context)
 {
-    companion object {
+    companion object
+    {
         private const val TAG = "AudioWaveManager"
 
         // Using weakReference to prevent memory leaks
@@ -100,6 +70,7 @@ class AudioWaveManager private constructor(private val context: Context)
     private val audioProcessor = AudioProcessor()
     private val decoderRegistry = DecoderRegistry()
 
+    private var audioCapture: UsbAudioCapture? = null
     private var audioCaptureCallback: AudioCaptureCallback? = null
     private var activeDecoder: AudioDecoder? = null
     private var isCapturing = false
@@ -137,10 +108,75 @@ class AudioWaveManager private constructor(private val context: Context)
      * @return Flow emitting captured audio data
      */
     fun captureFlow(): Flow<ByteArray> = flow {
-        // Implementation would emit audio data as it's captured
-        // This is a placeholder that would be implemented based on actual capture mechanisms
-        Timber.d("captureFlow() called but not fully implemented")
+        if (!isCapturing) {
+            Timber.w("Attempting to collect from captureFlow when not capturing")
+            return@flow
+        }
+
+        val capture = audioCapture
+        if (capture == null) {
+            Timber.e("Audio capture is null despite isCapturing=true")
+            return@flow
+        }
+
+        try {
+            while (isCapturing && capture.isCapturing()) {
+                // Read audio data from the USB device
+                val audioDataResult = capture.readAudioData()
+
+                if (audioDataResult.isSuccess) {
+                    val audioData = audioDataResult.getOrThrow()
+
+                    // Process the audio data through the processing chain
+                    val processedData = processAudioData(audioData)
+
+                    // Notify callback if registered
+                    audioCaptureCallback?.onAudioDataCaptured(processedData)
+
+                    // Emit the processed data to the flow
+                    emit(processedData)
+                } else {
+                    // Handle error case
+                    val error = audioDataResult.exceptionOrNull()
+                    Timber.e(error, "Error reading audio data")
+                    delay(100) // Wait a short time before retrying
+                    // No continue needed - loop will naturally continue
+                }
+            }
+        } catch (e: Exception) {
+            Timber.e(e, "Error in captureFlow")
+        }
     }.flowOn(Dispatchers.IO)
+
+    /**
+     * Process the raw audio data through effects and decoders.
+     *
+     * @param data The raw audio data
+     * @return The processed audio data
+     */
+    private fun processAudioData(data: ByteArray): ByteArray {
+        // First apply any audio effects from the AudioProcessor
+        val processedData = audioProcessor.processAudio(data)
+
+        // Then apply decoder if active
+        val decoder = activeDecoder
+        if (decoder != null) {
+            try {
+                val decodedData = decoder.decode(processedData)
+                // Notify of decoded data via callback
+                audioCaptureCallback?.onAudioDataDecoded(decodedData)
+                // Return the decoded data
+                return decodedData
+            } catch (e: Exception) {
+                Timber.e(e, "Error decoding audio data")
+                // Return the processed but not decoded data if decoding fails
+                return processedData
+            }
+        }
+
+        // Return the processed (but not decoded) data
+        return processedData
+    }
 
     /**
      * Set an audio decoder to process the captured audio data.
@@ -175,10 +211,13 @@ class AudioWaveManager private constructor(private val context: Context)
     /**
      * Get a list of connected USB audio devices.
      *
-     * @return A list of connected USB audio devices
+     * @return A list of connected USB audio devices, or empty list if there was an error
      */
     fun getConnectedDevices(): List<UsbDevice> {
-        return usbDeviceDiscovery.findAudioDevices()
+        return usbDeviceDiscovery.findAudioDevices().getOrElse { error ->
+            Timber.e(error, "Error finding audio devices")
+            emptyList() // Return empty list on error
+        }
     }
 
     /**
@@ -195,19 +234,31 @@ class AudioWaveManager private constructor(private val context: Context)
 
         return@withContext ErrorHandler.runCatching {
             // Request permission if needed
-            val hasPermission = usbPermissionManager.requestPermission(device).getOrThrow()
+            val hasPermission = usbPermissionManager.requestPermission(device)
             if (!hasPermission) {
                 throw AudioException.PermissionDeniedException("Permission denied for device: ${device.deviceName}")
             }
 
-            // Start audio capture on a background thread
-            threadManager.executeTask {
-                isCapturing = true
+            // Get USB manager from context
+            val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
 
-                // TODO: Implement actual audio stream capture from device
+            // Create and open the audio capture device
+            val capture = UsbAudioCapture(usbManager, device)
 
-                Timber.d("Audio capture started from device: ${device.deviceName}")
-            }
+            // Configure audio parameters if needed
+            // capture.setAudioParameters(48000, 2, 16)  // Example: 48kHz, stereo, 16-bit
+
+            // Open the device
+            capture.open().getOrThrow()
+
+            // Start the capture
+            capture.startCapture().getOrThrow()
+
+            // Store the audio capture instance
+            audioCapture = capture
+            isCapturing = true
+
+            Timber.d("Audio capture started from device: ${device.deviceName}")
         }
     }
 
@@ -223,7 +274,17 @@ class AudioWaveManager private constructor(private val context: Context)
         }
 
         return@withContext ErrorHandler.runCatching {
-            // TODO: Implement actual audio stream stopping
+            val capture = audioCapture
+            if (capture != null) {
+                // Stop the capture
+                capture.stopCapture().getOrThrow()
+
+                // Close the device
+                capture.close().getOrThrow()
+
+                // Clear the reference
+                audioCapture = null
+            }
 
             isCapturing = false
             Timber.d("Audio capture stopped")
@@ -263,12 +324,31 @@ class AudioWaveManager private constructor(private val context: Context)
     }
 
     /**
+     * Check if there are any effects in the processing chain.
+     *
+     * @return True if there are effects, false otherwise
+     */
+    fun hasEffects(): Boolean {
+        return audioProcessor.getEffects().isNotEmpty()
+    }
+
+    /**
      * Get a list of currently active effects.
      *
      * @return A list of active effects
      */
     fun getActiveEffects(): List<Effect> {
         return audioProcessor.getEffects()
+    }
+
+    /**
+     * Clear all effects from the processing chain.
+     *
+     * @return This AudioWaveManager instance for method chaining
+     */
+    fun clearEffects(): AudioWaveManager {
+        audioProcessor.clearEffects()
+        return this
     }
 
     /**
@@ -283,6 +363,10 @@ class AudioWaveManager private constructor(private val context: Context)
                 // Stop capture if active
                 stopCapture().getOrThrow()
             }
+
+            // Close audio capture if it exists
+            audioCapture?.close()
+            audioCapture = null
 
             threadManager.shutdown()
             usbPermissionManager.release()
