@@ -4,8 +4,11 @@ import android.hardware.usb.UsbDevice
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material.ExperimentalMaterialApi
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
@@ -19,7 +22,10 @@ fun DeviceScreen(
     isConnected: Boolean,
     currentDeviceName: String,
     isProcessingActive: Boolean,
-    onNavigateToProcessing: () -> Unit
+    onNavigateToProcessing: () -> Unit,
+    isDebugMode: Boolean = false,
+    showAllDevices: Boolean = false,
+    onToggleShowAllDevices: (Boolean) -> Unit = {}
 )
 {
     Column(
@@ -51,16 +57,42 @@ fun DeviceScreen(
                 )
 
                 Text(
-                    text = "Found ${connectedDevices.size} USB audio device(s)",
+                    text = "Found ${connectedDevices.size} ${if (showAllDevices) "USB" else "USB audio"} device(s)",
                     style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.padding(top = 8.dp)
                 )
+
+                // Debug mode toggle
+                if (isDebugMode) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Show all USB devices:",
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Switch(
+                            checked = showAllDevices,
+                            onCheckedChange = onToggleShowAllDevices
+                        )
+                    }
+
+                    Text(
+                        text = "Debug mode enabled",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
             }
         }
 
         // Device list
         Text(
-            text = "Available Devices",
+            text = if (showAllDevices) "All USB Devices" else "Available Audio Devices",
             style = MaterialTheme.typography.titleLarge,
             modifier = Modifier.padding(bottom = 8.dp)
         )
@@ -68,16 +100,55 @@ fun DeviceScreen(
         if (connectedDevices.isEmpty())
         {
             // No devices found message
-            Box(
+            Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(200.dp),
-                contentAlignment = Alignment.Center
+                    .padding(bottom = 16.dp)
             ) {
-                Text(
-                    text = "No USB audio devices found.\nPlease connect a device and refresh.",
-                    textAlign = TextAlign.Center
-                )
+                Column(
+                    modifier = Modifier
+                        .padding(16.dp)
+                        .fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = if (showAllDevices)
+                            "No USB devices found."
+                        else
+                            "No USB audio devices found.",
+                        textAlign = TextAlign.Center,
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Text(
+                        text = if (showAllDevices)
+                            "Please connect a USB device and refresh."
+                        else
+                            "To use this app, you need to connect a USB audio device.",
+                        textAlign = TextAlign.Center,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    if (!showAllDevices && isDebugMode) {
+                        OutlinedButton(
+                            onClick = { onToggleShowAllDevices(true) }
+                        ) {
+                            Text("Show All USB Devices")
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Text(
+                        text = "Note: You may need a USB OTG adapter to connect USB devices to your Android device.",
+                        textAlign = TextAlign.Center,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
             }
         }
         else
@@ -91,8 +162,9 @@ fun DeviceScreen(
                 items(connectedDevices) { device ->
                     DeviceItem(
                         device = device,
-                        isSelected = device == connectedDevices.find { it.deviceName == currentDeviceName },
-                        onClick = { onDeviceSelected(device) }
+                        isSelected = device.deviceName == currentDeviceName,
+                        onClick = { onDeviceSelected(device) },
+                        isAudioDevice = !showAllDevices || device.deviceClass == 1
                     )
                 }
             }
@@ -106,7 +178,7 @@ fun DeviceScreen(
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Button(
-                onClick = onRefreshRequested,
+                onClick = { onRefreshRequested() },
                 modifier = Modifier.weight(1f)
             ) {
                 Text("Refresh Devices")
@@ -125,37 +197,122 @@ fun DeviceScreen(
     }
 }
 
+@OptIn(ExperimentalMaterialApi::class)
 @Composable
 fun DeviceItem(
     device: UsbDevice,
     isSelected: Boolean,
+    isAudioDevice: Boolean = true,
     onClick: () -> Unit
 ) {
-    Surface(
+    val expanded = remember { mutableStateOf(false) }
+
+    Card(
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 4.dp),
-        color = if (isSelected)
-            MaterialTheme.colorScheme.primaryContainer
-        else
-            MaterialTheme.colorScheme.surface,
-        onClick = onClick
+        colors = CardDefaults.cardColors(
+            containerColor = if (isSelected)
+                MaterialTheme.colorScheme.primaryContainer
+            else if (!isAudioDevice)
+                MaterialTheme.colorScheme.surfaceVariant
+            else
+                MaterialTheme.colorScheme.surface
+        ),
+        onClick = {
+            if (isAudioDevice) {
+                onClick()
+            } else {
+                expanded.value = !expanded.value
+            }
+        }
     ) {
         Column(
             modifier = Modifier
                 .padding(16.dp)
                 .fillMaxWidth()
         ) {
-            Text(
-                text = "Device: ${device.deviceName}",
-                style = MaterialTheme.typography.bodyLarge
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Device: ${device.deviceName}",
+                    style = MaterialTheme.typography.bodyLarge
+                )
+
+                if (!isAudioDevice) {
+                    Surface(
+                        onClick = { },
+                        color = MaterialTheme.colorScheme.errorContainer,
+                        shape = MaterialTheme.shapes.small,
+                        modifier = Modifier.padding(4.dp)
+                    ) {
+                        Text(
+                            text = "Non-Audio",
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        )
+                    }
+                }
+            }
 
             Text(
                 text = "ID: ${device.deviceId}",
                 style = MaterialTheme.typography.bodyMedium,
                 modifier = Modifier.padding(top = 4.dp)
             )
+
+            if (device.productName != null) {
+                Text(
+                    text = "Product: ${device.productName}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+            }
+
+            if (device.manufacturerName != null) {
+                Text(
+                    text = "Manufacturer: ${device.manufacturerName}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+            }
+
+            // Show more details if expanded
+            if (expanded.value) {
+                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+                Text(
+                    text = "Device Class: ${device.deviceClass}",
+                    style = MaterialTheme.typography.bodySmall
+                )
+
+                Text(
+                    text = "Device Subclass: ${device.deviceSubclass}",
+                    style = MaterialTheme.typography.bodySmall
+                )
+
+                Text(
+                    text = "Vendor ID: ${device.vendorId}",
+                    style = MaterialTheme.typography.bodySmall
+                )
+
+                Text(
+                    text = "Product ID: ${device.productId}",
+                    style = MaterialTheme.typography.bodySmall
+                )
+
+                if (!isAudioDevice) {
+                    Text(
+                        text = "This device is not recognized as a USB audio device and cannot be used with AudioWave.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.padding(top = 8.dp)
+                    )
+                }
+            }
         }
     }
 }

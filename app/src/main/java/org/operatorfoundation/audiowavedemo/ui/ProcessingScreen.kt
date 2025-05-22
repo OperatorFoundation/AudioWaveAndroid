@@ -6,7 +6,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import org.operatorfoundation.audiowave.Effect
+import org.operatorfoundation.audiowave.effects.Effect
 import org.operatorfoundation.audiowave.effects.GainEffect
 import org.operatorfoundation.audiowave.effects.EchoEffect
 import org.operatorfoundation.audiowavedemo.ui.components.AudioLevelIndicator

@@ -1,10 +1,33 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- USB Audio Class -->
-    <usb-device class="1" subclass="1" /> <!-- Audio Control interface -->
-    <usb-device class="1" subclass="2" /> <!-- Audio Streaming interface -->
-    <usb-device class="1" subclass="3" /> <!-- MIDI Streaming interface -->
+    <!-- USB Audio Class - very permissive to detect most audio devices -->
+    <usb-device class="1" /> <!-- Any Audio Class device -->
 
-    <!-- Add specific device IDs here if needed -->
-    <!-- Example: <usb-device vendor-id="1234" product-id="5678" /> -->
+    <!-- All USB devices (for debug only) -->
+    <usb-device /> <!-- Match any USB device (only used when showAllDevices is enabled) -->
+
+    <!-- Common USB audio device vendor/product IDs -->
+    <!-- Blue Microphones (Yeti, etc.) -->
+    <usb-device vendor-id="2652" />
+
+    <!-- Focusrite Audio Interfaces -->
+    <usb-device vendor-id="5042" />
+
+    <!-- Audio-Technica Microphones -->
+    <usb-device vendor-id="1256" />
+
+    <!-- Generic USB Sound Cards -->
+    <usb-device vendor-id="7373" product-id="26" /> <!-- Common USB sound card -->
+
+    <!-- Generic USB Audio Adapters -->
+    <usb-device vendor-id="4292" /> <!-- C-Media based adapters -->
+
+    <!-- Icom -->
+    <usb-device vendor-id="1427" />
+    <!-- Yaesu -->
+    <usb-device vendor-id="1163" />
+    <!-- FTDI (used in many radio interfaces) -->
+    <usb-device vendor-id="1027" />
+    <!-- Silicon Labs CP210x (common in radio interfaces) -->
+    <usb-device vendor-id="4292" />
 </resources>

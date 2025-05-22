@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
 import org.operatorfoundation.audiowave.decoder.AudioDecoder
 import org.operatorfoundation.audiowave.decoder.DecoderRegistry
+import org.operatorfoundation.audiowave.effects.Effect
 import org.operatorfoundation.audiowave.exception.AudioException
 import org.operatorfoundation.audiowave.threading.AudioThreadManager
 import org.operatorfoundation.audiowave.usb.UsbAudioCapture
@@ -213,11 +214,29 @@ class AudioWaveManager private constructor(private val context: Context)
      *
      * @return A list of connected USB audio devices, or empty list if there was an error
      */
-    fun getConnectedDevices(): List<UsbDevice> {
-        return usbDeviceDiscovery.findAudioDevices().getOrElse { error ->
+    /**
+     * Get a list of connected USB audio devices.
+     *
+     * @param includeNonAudioDevices Whether to include non-audio USB devices in debug mode
+     * @return A list of connected USB audio devices, or empty list if there was an error
+     */
+    fun getConnectedDevices(includeNonAudioDevices: Boolean = false): List<UsbDevice> {
+        // First try to get audio devices
+        val audioDevices = usbDeviceDiscovery.findAudioDevices().getOrElse { error ->
             Timber.e(error, "Error finding audio devices")
             emptyList() // Return empty list on error
         }
+
+        // In debug mode, we can optionally include all USB devices for testing
+        if (BuildConfig.DEBUG && includeNonAudioDevices && audioDevices.isEmpty()) {
+            Timber.d("No audio devices found, fetching all USB devices for debug")
+            return usbDeviceDiscovery.getAllConnectedDevices().getOrElse { error ->
+                Timber.e(error, "Error finding all USB devices")
+                emptyList()
+            }
+        }
+
+        return audioDevices
     }
 
     /**

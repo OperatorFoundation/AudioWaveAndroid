@@ -5,6 +5,7 @@ import org.operatorfoundation.audiowave.utils.ErrorHandler
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.flow
+import org.operatorfoundation.audiowave.effects.Effect
 import timber.log.Timber
 import java.util.concurrent.CopyOnWriteArrayList
 

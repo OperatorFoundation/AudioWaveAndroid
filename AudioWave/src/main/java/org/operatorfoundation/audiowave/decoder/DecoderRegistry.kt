@@ -31,6 +31,7 @@ class DecoderRegistry
     {
         // Register built-in decoders
         registerDecoder(RadioWaveDecoder())
+        registerDecoder(WsprDecoder())
         Timber.d("DecoderRegistry initialized with default decoders")
     }
 

@@ -1,4 +1,4 @@
-package org.operatorfoundation.audiowave
+package org.operatorfoundation.audiowave.effects
 
 /**
  * Base interface for audio effects.

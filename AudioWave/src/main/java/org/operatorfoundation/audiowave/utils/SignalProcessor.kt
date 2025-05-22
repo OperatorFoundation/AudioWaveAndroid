@@ -163,6 +163,36 @@ class SignalProcessor
     }
 
     /**
+     * Apply a bandpass filter to the audio samples.
+     *
+     * @param samples The audio samples to filter
+     * @param lowFreq The lower cutoff frequency in Hz
+     * @param highFreq The upper cutoff frequency in Hz
+     * @param sampleRate The sample rate of the audio data in Hz
+     * @return The filtered audio samples
+     */
+    fun applyBandpassFilter(samples: ShortArray, lowFreq: Float, highFreq: Float, sampleRate: Int): ShortArray
+    {
+        // Apply highpass followed by lowpass to create bandpass effect
+        val highPassed = applyHighPassFilter(samples, lowFreq, sampleRate)
+        return applyLowPassFilter(highPassed, highFreq, sampleRate)
+    }
+
+    /**
+     * Perform FFT on real data and return complex result
+     *
+     * @param data Real input data
+     * @return Array of Complex numbers representing FFT result
+     */
+    fun fftComplex(data: DoubleArray): Array<Complex> {
+        // Convert to complex input
+        val input = Array(data.size) { Complex(data[it], 0.0) }
+
+        // Perform FFT
+        return fft(input)
+    }
+
+    /**
      * Applies Fast Fourier Transform to analyze frequency content of the audio.
      *
      * The FFT converts time-domain audio samples into frequency-domain representation,
@@ -280,6 +310,44 @@ class SignalProcessor
     {
         // RC time constant calculation (RC = 1/(2π*cutoffFreq))
         return 1.0f / (2.0f * Math.PI.toFloat() * cutoffFrequency)
+    }
+
+    /**
+     * Calculate energy at a specific frequency using Goertzel algorithm.
+     * Useful for WSPR tone detection.
+     *
+     * @param samples The audio samples to analyze
+     * @param targetFrequency The frequency to detect in Hz
+     * @param sampleRate The sample rate of the audio data in Hz
+     * @return The energy at the target frequency
+     */
+    fun calculateEnergy(samples: ShortArray, targetFrequency: Float, sampleRate: Int): Double
+    {
+        if (samples.isEmpty()) return 0.0
+
+        // Goertzel algorithm coefficients
+        val k = (0.5 + samples.size * targetFrequency / sampleRate).toInt()
+        val omega = 2.0 * Math.PI * k / samples.size
+        val cosine = Math.cos(omega)
+        val sine = Math.sin(omega)
+        val coeff = 2.0 * cosine
+
+        var q1 = 0.0
+        var q2 = 0.0
+
+        // Process all samples
+        for (sample in samples)
+        {
+            val q0 = coeff * q1 - q2 + sample
+            q2 = q1
+            q1 = q0
+        }
+
+        // Calculate magnitude squared
+        val real = q1 - q2 * cosine
+        val imag = q2 * sine
+
+        return real * real + imag * imag
     }
 
 

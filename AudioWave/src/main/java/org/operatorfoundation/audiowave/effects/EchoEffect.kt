@@ -1,6 +1,6 @@
 package org.operatorfoundation.audiowave.effects
 
-import org.operatorfoundation.audiowave.Effect
+import org.operatorfoundation.audiowave.effects.Effect
 import org.operatorfoundation.audiowave.utils.AudioUtils
 import org.operatorfoundation.audiowave.utils.ParameterValidator
 import timber.log.Timber

@@ -1,8 +1,10 @@
 package org.operatorfoundation.audiowavedemo
 
 import android.Manifest
+import android.content.Context
 import android.content.pm.PackageManager
 import android.hardware.usb.UsbDevice
+import android.hardware.usb.UsbManager
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -26,7 +28,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.operatorfoundation.audiowave.AudioCaptureCallback
 import org.operatorfoundation.audiowave.AudioWaveManager
-import org.operatorfoundation.audiowave.Effect
+import org.operatorfoundation.audiowave.effects.Effect
 import org.operatorfoundation.audiowavedemo.ui.DeviceScreen
 import org.operatorfoundation.audiowavedemo.ui.ProcessingScreen
 import org.operatorfoundation.audiowavedemo.ui.theme.AudioWaveDemoTheme
@@ -35,6 +37,7 @@ import timber.log.Timber
 class MainActivity : ComponentActivity(), AudioCaptureCallback {
     private lateinit var audioWaveManager: AudioWaveManager
     private var connectedDevices by mutableStateOf<List<UsbDevice>>(emptyList())
+    private var allUsbDevices by mutableStateOf<List<UsbDevice>>(emptyList())
     private var connectedDevice by mutableStateOf<UsbDevice?>(null)
     private var isProcessingActive by mutableStateOf(false)
     private var audioLevel by mutableStateOf(0f)
@@ -42,6 +45,8 @@ class MainActivity : ComponentActivity(), AudioCaptureCallback {
     private var activeDecoder by mutableStateOf<String?>(null)
     private var decodedData by mutableStateOf<ByteArray?>(null)
     private var activeEffects by mutableStateOf<List<Effect>>(emptyList())
+    private var showAllUsbDevices by mutableStateOf(false)
+    private var isDebugMode by mutableStateOf(false)
 
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -60,6 +65,13 @@ class MainActivity : ComponentActivity(), AudioCaptureCallback {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // Check if in debug mode
+        isDebugMode = try {
+            applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0
+        } catch (e: Exception) {
+            false
+        }
 
         // Initialize AudioWave library
         audioWaveManager = AudioWaveManager.getInstance(applicationContext)
@@ -112,13 +124,19 @@ class MainActivity : ComponentActivity(), AudioCaptureCallback {
                     ) {
                         composable("devices") {
                             DeviceScreen(
-                                connectedDevices = connectedDevices,
+                                connectedDevices = if (showAllUsbDevices) allUsbDevices else connectedDevices,
                                 onDeviceSelected = { connectToDevice(it) },
                                 onRefreshRequested = { initializeAudioWave() },
                                 isConnected = connectedDevice != null,
                                 currentDeviceName = connectedDevice?.deviceName ?: "",
                                 isProcessingActive = isProcessingActive,
-                                onNavigateToProcessing = { navController.navigate("processing") }
+                                onNavigateToProcessing = { navController.navigate("processing") },
+                                isDebugMode = isDebugMode,
+                                showAllDevices = showAllUsbDevices,
+                                onToggleShowAllDevices = { showAllDevices ->
+                                    showAllUsbDevices = showAllDevices
+                                    initializeAudioWave(showAllDevices)
+                                }
                             )
                         }
 
@@ -171,12 +189,18 @@ class MainActivity : ComponentActivity(), AudioCaptureCallback {
         }
     }
 
-    fun initializeAudioWave() {
+    fun initializeAudioWave(includeNonAudioDevices: Boolean = false) {
         lifecycleScope.launch {
             audioWaveManager.initialize().fold(
                 onSuccess = {
                     // Update the available devices
-                    connectedDevices = audioWaveManager.getConnectedDevices()
+                    connectedDevices = audioWaveManager.getConnectedDevices(includeNonAudioDevices)
+
+                    // Get all USB devices for debug mode
+                    if (isDebugMode) {
+                        val usbManager = getSystemService(Context.USB_SERVICE) as UsbManager
+                        allUsbDevices = usbManager.deviceList.values.toList()
+                    }
 
                     // Update available decoders
                     availableDecoders = audioWaveManager.getAvailableDecoders()
@@ -184,7 +208,7 @@ class MainActivity : ComponentActivity(), AudioCaptureCallback {
                     // Update active effects
                     activeEffects = audioWaveManager.getActiveEffects()
 
-                    Timber.d("AudioWave initialized, found ${connectedDevices.size} devices")
+                    Timber.d("AudioWave initialized, found ${connectedDevices.size} audio devices and ${allUsbDevices.size} total USB devices")
                 },
                 onFailure = { error ->
                     Toast.makeText(
