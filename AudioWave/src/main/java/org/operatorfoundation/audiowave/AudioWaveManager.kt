@@ -9,7 +9,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
-import org.operatorfoundation.audiowave.decoder.AudioDecoder
+import org.operatorfoundation.audiowave.codec.AudioDecoder
 import org.operatorfoundation.audiowave.decoder.DecoderRegistry
 import org.operatorfoundation.audiowave.effects.Effect
 import org.operatorfoundation.audiowave.exception.AudioException

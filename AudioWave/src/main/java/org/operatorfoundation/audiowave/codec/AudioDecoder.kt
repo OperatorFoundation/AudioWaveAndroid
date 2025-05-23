@@ -1,4 +1,4 @@
-package org.operatorfoundation.audiowave.decoder
+package org.operatorfoundation.audiowave.codec
 
 /**
  * Base interface for audio decoders.
@@ -9,7 +9,7 @@ package org.operatorfoundation.audiowave.decoder
  *
  * To create a custom decoder:
  * 1. Implement this interface
- * 2. Register the decoder with DecoderRegistry
+ * 2. Register codec in the CodecRegistry
  *
  * Example implementation:
  * ```

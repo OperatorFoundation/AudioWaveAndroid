@@ -1,5 +1,8 @@
 package org.operatorfoundation.audiowave.decoder
 
+import org.operatorfoundation.audiowave.codec.AudioDecoder
+import org.operatorfoundation.audiowave.codec.codecs.radio.RadioWaveDecoder
+import org.operatorfoundation.audiowave.codec.codecs.wspr.WsprDecoder
 import timber.log.Timber
 
 /**

@@ -1,11 +1,10 @@
-package org.operatorfoundation.audiowave.decoder
+package org.operatorfoundation.audiowave.codec.codecs.radio
 
+import org.operatorfoundation.audiowave.codec.AudioDecoder
 import org.operatorfoundation.audiowave.utils.AudioUtils
 import org.operatorfoundation.audiowave.utils.ParameterValidator
 import org.operatorfoundation.audiowave.utils.SignalProcessor
 import timber.log.Timber
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
 
 /**
  * Decoder for standard radio wave signals (AM/FM).
@@ -54,26 +53,26 @@ class RadioWaveDecoder : AudioDecoder
                 "am" -> true
                 "fm" -> false
                 else -> {
-                    Timber.w("Invalid mode: $it, defaulting to AM.")
+                    Timber.Forest.w("Invalid mode: $it, defaulting to AM.")
                     true
                 }
             }
-            Timber.d("Radio mode set to ${if (isAmMode) "AM" else "FM"}")
+            Timber.Forest.d("Radio mode set to ${if (isAmMode) "AM" else "FM"}")
         }
 
         params["centerFrequency"]?.let {
             centerFrequency = ParameterValidator.validatePositive((it as Number).toFloat(), "centerFrequency")
-            Timber.d("Center frequency set to $centerFrequency MHz")
+            Timber.Forest.d("Center frequency set to $centerFrequency MHz")
         }
 
         params["bandwidth"]?.let {
             bandwidth = ParameterValidator.validatePositive((it as Number).toFloat(), "bandwidth")
-            Timber.d("Bandwidth set to $bandwidth kHz")
+            Timber.Forest.d("Bandwidth set to $bandwidth kHz")
         }
 
         params["sampleRate"]?.let {
             sampleRate = ParameterValidator.validatePositive((it as Number).toFloat(), "sampleRate").toInt()
-            Timber.d("Sampe rate set to $sampleRate Hz")
+            Timber.Forest.d("Sampe rate set to $sampleRate Hz")
         }
     }
 
