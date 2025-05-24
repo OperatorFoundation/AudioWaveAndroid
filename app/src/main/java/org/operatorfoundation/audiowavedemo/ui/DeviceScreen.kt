@@ -14,6 +14,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 
+// Helper function to properly check if a device is an audio device
+private fun isAudioDevice(device: UsbDevice): Boolean {
+    for (i in 0 until device.interfaceCount) {
+        val intf = device.getInterface(i)
+        if (intf.interfaceClass == 1) { // USB Audio Class
+            return true
+        }
+    }
+    return false
+}
+
 @Composable
 fun DeviceScreen(
     connectedDevices: List<UsbDevice>,
@@ -164,7 +175,8 @@ fun DeviceScreen(
                         device = device,
                         isSelected = device.deviceName == currentDeviceName,
                         onClick = { onDeviceSelected(device) },
-                        isAudioDevice = !showAllDevices || device.deviceClass == 1
+                        // FIXED: Use proper audio device detection instead of device.deviceClass
+                        isAudioDevice = !showAllDevices || isAudioDevice(device)
                     )
                 }
             }
@@ -255,6 +267,19 @@ fun DeviceItem(
                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                         )
                     }
+                } else {
+                    Surface(
+                        onClick = { },
+                        color = MaterialTheme.colorScheme.primaryContainer,
+                        shape = MaterialTheme.shapes.small,
+                        modifier = Modifier.padding(4.dp)
+                    ) {
+                        Text(
+                            text = "Audio Device",
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        )
+                    }
                 }
             }
 
@@ -281,7 +306,7 @@ fun DeviceItem(
             }
 
             // Show more details if expanded
-            if (expanded.value) {
+            if (expanded.value || isAudioDevice) {
                 HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
                 Text(
@@ -295,14 +320,33 @@ fun DeviceItem(
                 )
 
                 Text(
-                    text = "Vendor ID: ${device.vendorId}",
+                    text = "Vendor ID: 0x${device.vendorId.toString(16)} (${device.vendorId})",
                     style = MaterialTheme.typography.bodySmall
                 )
 
                 Text(
-                    text = "Product ID: ${device.productId}",
+                    text = "Product ID: 0x${device.productId.toString(16)} (${device.productId})",
                     style = MaterialTheme.typography.bodySmall
                 )
+
+                // Show interface information for audio devices
+                if (isAudioDevice) {
+                    Text(
+                        text = "Interfaces: ${device.interfaceCount}",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+
+                    for (i in 0 until device.interfaceCount) {
+                        val intf = device.getInterface(i)
+                        if (intf.interfaceClass == 1) {
+                            Text(
+                                text = "  Audio Interface $i: class=${intf.interfaceClass}, subclass=${intf.interfaceSubclass}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                }
 
                 if (!isAudioDevice) {
                     Text(
