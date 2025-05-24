@@ -45,6 +45,7 @@ class UsbAudioCapture(private val usbManager: UsbManager, private val device: Us
 
     /**
      * Opens the USB device and configures it for audio capture.
+     * Uses the centralized UsbAudioDetector for consistent device detection.
      *
      * @return Result with success or failure
      */
@@ -53,37 +54,51 @@ class UsbAudioCapture(private val usbManager: UsbManager, private val device: Us
         return@withContext ErrorHandler.runCatching {
             if (connection != null)
             {
-                Timber.w("Device already open")
+                Timber.tag(TAG).w("Device already open")
                 return@runCatching
             }
+
+            Timber.tag(TAG).d("=== Opening USB Audio Device using centralized detector ===")
 
             // Open a connection to the USB device
             val conn = usbManager.openDevice(device)
                 ?: throw AudioException.DeviceConnectionException("Could not open USB device")
 
-            // Find the audio interface
-            val audioInterface = findAudioInterface()
-                ?: throw AudioException.DeviceConfigurationException("No audio interface found")
+            // Use centralized audio detection logic
+            val audioConfig = UsbAudioDetector.findBestAudioConfiguration(device, TAG)
+                ?: run {
+                    conn.close()
+                    throw AudioException.DeviceConfigurationException("No audio input endpoint found")
+                }
 
-            // Find the input endpoint
-            val endpoint = findAudioEndpoint(audioInterface)
-                ?: throw AudioException.DeviceConfigurationException("No audio input endpoint found")
+            // Validate configuration
+            if (audioConfig.inputEndpoint == null) {
+                conn.close()
+                throw AudioException.DeviceConfigurationException("Selected configuration has no input endpoint")
+            }
+
+            // Log the selected configuration
+            Timber.tag(TAG).d("✅ Selected audio configuration:")
+            Timber.tag(TAG).d("  ${audioConfig.getDescription()}")
 
             // Claim the interface
-            if (!conn.claimInterface(audioInterface, true)) {
+            if (!conn.claimInterface(audioConfig.usbInterface, true)) {
                 conn.close()
                 throw AudioException.DeviceConnectionException("Could not claim audio interface")
             }
 
             // Configure the device
-            configureAudioDevice(conn, audioInterface)
+            configureAudioDevice(conn, audioConfig)
 
             // Store the connection info
             connection = conn
-            usbInterface = audioInterface
-            usbEndpoint = endpoint
+            usbInterface = audioConfig.usbInterface
+            usbEndpoint = audioConfig.inputEndpoint
 
-            Timber.d("USB Audio device opened and configured: ${device.deviceName}")
+            Timber.tag(TAG).d("✅ USB Audio device opened and configured: ${device.deviceName}")
+            Timber.tag(TAG).d("   Quality: ${audioConfig.quality.displayName}")
+            Timber.tag(TAG).d("   Strategy: ${audioConfig.strategy.displayName}")
+            Timber.tag(TAG).d("=== USB Audio Device Setup Complete ===")
         }
     }
 
@@ -199,60 +214,75 @@ class UsbAudioCapture(private val usbManager: UsbManager, private val device: Us
     }
 
     /**
-     * Finds the audio interface on the USB device.
-     */
-    private fun findAudioInterface(): UsbInterface?
-    {
-        for (i in 0 until device.interfaceCount)
-        {
-            val intf = device.getInterface(i)
-            if (intf.interfaceClass == USB_CLASS_AUDIO)
-            {
-                return intf
-            }
-        }
-        return null
-    }
-
-    /**
-     * Finds an audio input endpoint on the specified interface.
-     */
-    private fun findAudioEndpoint(intf: UsbInterface): UsbEndpoint?
-    {
-        for (i in 0 until intf.endpointCount) {
-            val endpoint = intf.getEndpoint(i)
-            // Check for input (IN) endpoint
-            if (endpoint.direction == UsbConstants.USB_DIR_IN &&
-                endpoint.type == UsbConstants.USB_ENDPOINT_XFER_ISOC)
-            {
-                return endpoint
-            }
-        }
-        return null
-    }
-
-    /**
      * Configures the USB device for audio streaming.
-     * This involves sending control transfers to set up the audio format.
+     * Enhanced to use information from the audio configuration.
      */
-    private fun configureAudioDevice(conn: UsbDeviceConnection, intf: UsbInterface)
+    private fun configureAudioDevice(conn: UsbDeviceConnection, audioConfig: UsbAudioDetector.AudioConfiguration)
     {
-        // In a real implementation, this would involve:
-        // 1. Setting the alternate setting for the interface
-        // 2. Configuring the sample rate
-        // 3. Setting up the audio format
+        val intf = audioConfig.usbInterface
 
-        // For simplicity, we'll assume the device is already configured
-        // But in a real implementation, you would need to send the appropriate control transfers
+        // Log the configuration we're working with
+        Timber.tag(TAG).d("Configuring audio device:")
+        Timber.tag(TAG).d("  ${audioConfig.getDescription()}")
 
-        // Example: Set alternate setting for better bandwidth
+        // Try to set the interface (may not be needed for all devices)
         try {
             conn.setInterface(intf)
+            Timber.tag(TAG).d("  Interface configuration applied")
         } catch (e: Exception) {
-            Timber.w(e, "Error setting interface")
+            Timber.tag(TAG).w(e, "Could not set interface configuration (may not be required)")
         }
 
-        Timber.d("Audio device configured with: $sampleRate Hz, $channelCount channels, $bitsPerSample bits")
+        // Provide quality-specific configuration advice
+        when (audioConfig.quality) {
+            UsbAudioDetector.AudioQuality.PROFESSIONAL -> {
+                Timber.tag(TAG).d("  Professional quality device detected - optimal configuration expected")
+            }
+            UsbAudioDetector.AudioQuality.STANDARD -> {
+                Timber.tag(TAG).d("  Standard quality device - good audio performance expected")
+            }
+            UsbAudioDetector.AudioQuality.BASIC -> {
+                Timber.tag(TAG).d("  Basic quality device - may need adjusted buffer sizes")
+                // Could adjust buffer size here based on endpoint packet size
+                adjustBufferSizeForEndpoint(audioConfig.inputEndpoint!!)
+            }
+            UsbAudioDetector.AudioQuality.EXPERIMENTAL -> {
+                Timber.tag(TAG).w("  Experimental device - audio quality may vary")
+                Timber.tag(TAG).w("  Consider using lower sample rates or adjusted buffer sizes")
+                adjustBufferSizeForEndpoint(audioConfig.inputEndpoint!!)
+            }
+        }
+        // FIXME:
+        // 1. Set alternate settings for the interface (for bandwidth management)
+        // 2. Send control transfers to configure sample rate
+        // 3. Set up the audio format parameters
+        // 4. Handle USB Audio Class specific descriptors
+
+        Timber.tag(TAG).d("Audio device configured with: $sampleRate Hz, $channelCount channels, $bitsPerSample bits")
+    }
+
+    /**
+     * Adjust buffer size based on endpoint characteristics for better compatibility
+     */
+    private fun adjustBufferSizeForEndpoint(endpoint: UsbEndpoint) {
+        val packetSize = endpoint.maxPacketSize
+
+        when {
+            packetSize < 64 -> {
+                // Very small packets - use smaller buffer to reduce latency
+                bufferSize = minOf(bufferSize, 1024)
+                Timber.tag(TAG).d("  Adjusted buffer size to $bufferSize for small packet endpoint")
+            }
+            packetSize > 512 -> {
+                // Large packets - can use bigger buffer for efficiency
+                bufferSize = maxOf(bufferSize, 8192)
+                Timber.tag(TAG).d("  Adjusted buffer size to $bufferSize for large packet endpoint")
+            }
+            else -> {
+                // Standard packet size - keep default buffer
+                Timber.tag(TAG).d("  Using default buffer size $bufferSize for standard packet endpoint")
+            }
+        }
     }
 
     /**

@@ -5,7 +5,6 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.hardware.usb.UsbConfiguration
 import android.hardware.usb.UsbConstants
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbDeviceConnection
@@ -19,6 +18,7 @@ import kotlinx.coroutines.withContext
 import timber.log.Timber
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.resume
+import org.operatorfoundation.audiowave.usb.UsbAudioDetector
 
 /**
  * Manages USB device connection and audio stream handling.
@@ -233,178 +233,63 @@ internal class UsbDeviceManager(private val context: Context)
 
     /**
      * Open and configure the USB device after permission is granted.
-     * This finds the audio interface and endpoints, and establishes the connection.
+     * Uses the centralized UsbAudioDetector for consistent device detection.
      *
      * @param device The USB device to open
      * @return true if successful, false otherwise
      */
-    private fun openUsbDevice(device: UsbDevice): Boolean
-    {
-        Timber.tag(TAG).d("Attempting to open device: ${device.deviceName}")
-        debugDeviceInterfaces(device)
+    private fun openUsbDevice(device: UsbDevice): Boolean {
+        Timber.tag(TAG).d("=== Opening USB Device using centralized detector ===")
 
-        // Find Audio Interface
-        var audioInterface: UsbInterface? = null
-        var inputEndpoint: UsbEndpoint? = null
-        var outputEndpoint: UsbEndpoint? = null
+        // Use centralized audio detection logic
+        val audioConfig = UsbAudioDetector.findBestAudioConfiguration(device, TAG)
 
-        // Strategy 1: Look for Audio Streaming interface (most proper audio devices)
-        Timber.tag(TAG).d("Strategy 1: Looking for Audio Streaming interfaces...")
-        for (index in 0 until device.interfaceCount)
-        {
-            val intf = device.getInterface(index)
-
-            if (intf.interfaceClass == AUDIO_CLASS && intf.interfaceSubclass == SUBCLASS_AUDIOSTREAMING)
-            {
-                Timber.tag(TAG).d("Found Audio Streaming interface $index")
-                audioInterface = intf
-
-                for (i in 0 until intf.endpointCount)
-                {
-                    val endpoint = intf.getEndpoint(i)
-
-                    if (endpoint.type == UsbConstants.USB_ENDPOINT_XFER_ISOC)
-                    {
-                        if (endpoint.direction == UsbConstants.USB_DIR_IN)
-                        {
-                            inputEndpoint = endpoint
-                            Timber.tag(TAG).d("Found isochronous input endpoint")
-                        }
-                        else if (endpoint.direction == UsbConstants.USB_DIR_OUT)
-                        {
-                            outputEndpoint = endpoint
-                            Timber.tag(TAG).d("Found isochronous output endpoint")
-                        }
-                    }
-                }
-
-                if (inputEndpoint != null) break
-            }
-        }
-
-        // Strategy 2: Look for any Audio Class interface with suitable endpoints
-        if (audioInterface == null || inputEndpoint == null)
-        {
-            Timber.tag(TAG).d("Strategy 2: Looking for any Audio Class interfaces...")
-            for (index in 0 until device.interfaceCount)
-            {
-                val intf = device.getInterface(index)
-
-                if (intf.interfaceClass == AUDIO_CLASS)
-                {
-                    Timber.tag(TAG).d("Found Audio Class interface $index (subclass: ${intf.interfaceSubclass})")
-
-                    for (i in 0 until intf.endpointCount)
-                    {
-                        val endpoint = intf.getEndpoint(i)
-
-                        // Accept both isochronous and bulk endpooints
-                        if (endpoint.type == UsbConstants.USB_ENDPOINT_XFER_ISOC ||
-                            endpoint.type == UsbConstants.USB_ENDPOINT_XFER_BULK
-                        ) {
-                            if (endpoint.direction == UsbConstants.USB_DIR_IN && inputEndpoint == null)
-                            {
-                                audioInterface = intf
-                                inputEndpoint = endpoint
-                                Timber.tag(TAG).d("Found ${getEndpointTypeString(endpoint.type)} input endpoint")
-                            }
-                            else if (endpoint.direction == UsbConstants.USB_DIR_OUT && outputEndpoint == null)
-                            {
-                                if (audioInterface == null) audioInterface = intf
-                                outputEndpoint = endpoint
-                                Timber.tag(TAG).d("Found ${getEndpointTypeString(endpoint.type)} output endpoint")
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Strategy 3: Look for ANY interface with audio-like endpoints (fallback for non-compliant devices)
-        if (audioInterface == null || inputEndpoint == null) {
-            Timber.tag(TAG).d("Strategy 3: Looking for any interface with suitable endpoints...")
-            for (index in 0 until device.interfaceCount) {
-                val intf = device.getInterface(index)
-                Timber.tag(TAG).d("Checking interface $index (class: ${intf.interfaceClass})")
-
-                for (i in 0 until intf.endpointCount) {
-                    val endpoint = intf.getEndpoint(i)
-
-                    // Look for bulk or isochronous endpoints that could carry audio
-                    if ((endpoint.type == UsbConstants.USB_ENDPOINT_XFER_BULK ||
-                                endpoint.type == UsbConstants.USB_ENDPOINT_XFER_ISOC) &&
-                        endpoint.maxPacketSize >= 64) { // Reasonable size for audio data
-
-                        if (endpoint.direction == UsbConstants.USB_DIR_IN && inputEndpoint == null) {
-                            Timber.tag(TAG).d("Found potential input endpoint on interface $index")
-                            audioInterface = intf
-                            inputEndpoint = endpoint
-                        } else if (endpoint.direction == UsbConstants.USB_DIR_OUT && outputEndpoint == null) {
-                            if (audioInterface == null) {
-                                audioInterface = intf
-                            }
-                            outputEndpoint = endpoint
-                            Timber.tag(TAG).d("Found potential output endpoint on interface $index")
-                        }
-                    }
-                }
-
-                if (inputEndpoint != null) break
-            }
-        }
-
-        // Log what we found
-        if (audioInterface == null)
-        {
-            Timber.tag(TAG).e("No suitable audio interface found")
+        if (audioConfig == null) {
+            Timber.tag(TAG).e("❌ No suitable audio configuration found")
+            Timber.tag(TAG).d("Device debug info:")
+            Timber.tag(TAG).d(UsbAudioDetector.getDeviceDebugInfo(device))
             return false
         }
 
-        if (inputEndpoint == null)
-        {
-            Timber.tag(TAG).e("No suitable audio input endpoint found")
-            Timber.tag(TAG).e("Device interface details:")
-            debugDeviceInterfaces(device)
+        // Log the selected configuration
+        Timber.tag(TAG).d("✅ Selected audio configuration:")
+        Timber.tag(TAG).d("  ${audioConfig.getDescription()}")
+
+        // Validate that we have at least an input endpoint
+        if (audioConfig.inputEndpoint == null) {
+            Timber.tag(TAG).e("❌ Configuration has no input endpoint")
             return false
-        }
-
-        Timber.tag(TAG).d("Successfully found:")
-        Timber.tag(TAG).d("  Audio interface: class=${audioInterface.interfaceClass}, subclass=${audioInterface.interfaceSubclass}")
-        Timber.tag(TAG).d("  Input endpoint: type=${getEndpointTypeString(inputEndpoint.type)}, maxPacket=${inputEndpoint.maxPacketSize}")
-
-        if (outputEndpoint != null)
-        {
-            Timber.tag(TAG).d("  Output endpoint: type=${getEndpointTypeString(outputEndpoint.type)}, maxPacket=${outputEndpoint.maxPacketSize}")
-        }
-        else
-        {
-            Timber.tag(TAG).d("  No output endpoint found - will operate in input-only mode")
         }
 
         // Open connection and claim interface
         val connection = usbManager.openDevice(device)
-        if (connection == null)
-        {
-            Timber.tag(TAG).e("Could not open USB connection")
+        if (connection == null) {
+            Timber.tag(TAG).e("❌ Could not open USB connection")
             return false
         }
 
-        if (!connection.claimInterface(audioInterface, true))
-        {
-            Timber.tag(TAG).e("Could not claim audio interface")
+        if (!connection.claimInterface(audioConfig.usbInterface, true)) {
+            Timber.tag(TAG).e("❌ Could not claim audio interface")
             connection.close()
             return false
         }
 
-        this.usbInterface = audioInterface
-        this.inputEndpoint = inputEndpoint
-        this.outputEndpoint = outputEndpoint
+        // Store the configuration
+        this.usbInterface = audioConfig.usbInterface
+        this.inputEndpoint = audioConfig.inputEndpoint
+        this.outputEndpoint = audioConfig.outputEndpoint
         this.usbConnection = connection
 
-        Timber.tag(TAG).d("Successfully opened and configured USB device")
-        return true
+        Timber.tag(TAG).d("✅ Successfully opened and configured USB device")
+        Timber.tag(TAG).d("   Quality: ${audioConfig.quality.displayName}")
+        Timber.tag(TAG).d("   Strategy: ${audioConfig.strategy.displayName}")
+        Timber.tag(TAG).d("=== USB Device Setup Complete ===")
 
+        return true
     }
+
+
+
 
     /**
      * Start capturing audio from the USB device.
