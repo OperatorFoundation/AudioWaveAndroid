@@ -10,7 +10,7 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
 import org.operatorfoundation.audiowave.codec.AudioDecoder
-import org.operatorfoundation.audiowave.decoder.DecoderRegistry
+import org.operatorfoundation.audiowave.codec.CodecRegistry
 import org.operatorfoundation.audiowave.effects.Effect
 import org.operatorfoundation.audiowave.exception.AudioException
 import org.operatorfoundation.audiowave.threading.AudioThreadManager
@@ -69,7 +69,7 @@ class AudioWaveManager private constructor(private val context: Context)
     private val usbDeviceDiscovery = UsbDeviceDiscovery(context)
     private val usbPermissionManager = UsbPermissionManager(context)
     private val audioProcessor = AudioProcessor()
-    private val decoderRegistry = DecoderRegistry()
+    private val decoderRegistry = CodecRegistry()
 
     private var audioCapture: UsbAudioCapture? = null
     private var audioCaptureCallback: AudioCaptureCallback? = null
@@ -196,7 +196,7 @@ class AudioWaveManager private constructor(private val context: Context)
      * @return A list of decoder IDs
      */
     fun getAvailableDecoders(): List<String> {
-        return decoderRegistry.getAvailableDecoders()
+        return decoderRegistry.getAvailableCodecs()
     }
 
     /**
@@ -206,7 +206,7 @@ class AudioWaveManager private constructor(private val context: Context)
      * @return A map containing the decoder's information, or null if not found
      */
     fun getDecoderInfo(decoderId: String): Map<String, String>? {
-        return decoderRegistry.getDecoderInfo(decoderId)
+        return decoderRegistry.getCodecInfo(decoderId)
     }
 
     /**

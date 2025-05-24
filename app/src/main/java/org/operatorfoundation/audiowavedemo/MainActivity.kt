@@ -17,7 +17,6 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.navigation.compose.NavHost
@@ -63,24 +62,32 @@ class MainActivity : ComponentActivity(), AudioCaptureCallback {
         }
     }
 
-    override fun onCreate(savedInstanceState: Bundle?) {
+    override fun onCreate(savedInstanceState: Bundle?)
+    {
         super.onCreate(savedInstanceState)
 
+        // Test Timber logging
+        Timber.d("MainActivity onCreate - Timber is working!")
+        Timber.tag("TEST").d("Tagged timber log test")
+
         // Check if in debug mode
-        isDebugMode = try {
+        isDebugMode = try
+        {
             applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0
-        } catch (e: Exception) {
-            false
         }
+        catch (e: Exception) { false }
 
         // Initialize AudioWave library
         audioWaveManager = AudioWaveManager.getInstance(applicationContext)
         audioWaveManager.setAudioCaptureCallback(this)
 
         // Check for required permissions
-        if (!hasRequiredPermissions()) {
+        if (!hasRequiredPermissions())
+        {
             requestPermissions()
-        } else {
+        }
+        else
+        {
             // Initialize AudioWave library
             initializeAudioWave()
         }
@@ -223,21 +230,25 @@ class MainActivity : ComponentActivity(), AudioCaptureCallback {
         }
     }
 
-    private fun hasRequiredPermissions(): Boolean {
+    private fun hasRequiredPermissions(): Boolean
+    {
         return ContextCompat.checkSelfPermission(
             this,
             Manifest.permission.RECORD_AUDIO
         ) == PackageManager.PERMISSION_GRANTED
     }
 
-    private fun requestPermissions() {
+    private fun requestPermissions()
+    {
         // Use the ActivityResult API instead of the deprecated requestPermissions
         requestPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
     }
 
-    fun connectToDevice(device: UsbDevice) {
+    fun connectToDevice(device: UsbDevice)
+    {
+        if (isDebugMode) { debugSelectedDevice(device) }
+
         lifecycleScope.launch {
-            // Use the updated API with startCapture
             audioWaveManager.startCapture(device).fold(
                 onSuccess = {
                     connectedDevice = device
@@ -262,6 +273,45 @@ class MainActivity : ComponentActivity(), AudioCaptureCallback {
                 }
             )
         }
+    }
+
+    fun debugSelectedDevice(device: UsbDevice)
+    {
+        val usbManager = getSystemService(Context.USB_SERVICE) as UsbManager
+
+        Timber.d("=== DEVICE DEBUG INFO ===")
+        Timber.d("Device Name: ${device.deviceName}")
+        Timber.d("Product Name: ${device.productName}")
+        Timber.d("Manufacturer: ${device.manufacturerName}")
+        Timber.d("Vendor ID: 0x${device.vendorId.toString(16)} (${device.vendorId})")
+        Timber.d("Product ID: 0x${device.productId.toString(16)} (${device.productId})")
+        Timber.d("Device Class: ${device.deviceClass}")
+        Timber.d("Device Subclass: ${device.deviceSubclass}")
+        Timber.d("Device Protocol: ${device.deviceProtocol}")
+        Timber.d("Interface Count: ${device.interfaceCount}")
+
+        for (i in 0 until device.interfaceCount) {
+            val intf = device.getInterface(i)
+            Timber.d("--- Interface $i ---")
+            Timber.d("  Class: ${intf.interfaceClass} ${if (intf.interfaceClass == 1) "(AUDIO)" else ""}")
+            Timber.d("  Subclass: ${intf.interfaceSubclass}")
+            Timber.d("  Protocol: ${intf.interfaceProtocol}")
+            Timber.d("  Endpoint Count: ${intf.endpointCount}")
+
+            for (j in 0 until intf.endpointCount) {
+                val endpoint = intf.getEndpoint(j)
+                val direction = if (endpoint.direction == android.hardware.usb.UsbConstants.USB_DIR_IN) "IN" else "OUT"
+                val type = when (endpoint.type) {
+                    android.hardware.usb.UsbConstants.USB_ENDPOINT_XFER_CONTROL -> "CONTROL"
+                    android.hardware.usb.UsbConstants.USB_ENDPOINT_XFER_ISOC -> "ISOCHRONOUS"
+                    android.hardware.usb.UsbConstants.USB_ENDPOINT_XFER_BULK -> "BULK"
+                    android.hardware.usb.UsbConstants.USB_ENDPOINT_XFER_INT -> "INTERRUPT"
+                    else -> "UNKNOWN"
+                }
+                Timber.d("    Endpoint $j: $direction $type (maxPacket: ${endpoint.maxPacketSize})")
+            }
+        }
+        Timber.d("=== END DEBUG INFO ===")
     }
 
     fun startAudioCapture() {

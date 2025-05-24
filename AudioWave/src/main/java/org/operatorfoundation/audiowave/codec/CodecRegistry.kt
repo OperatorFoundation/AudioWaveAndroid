@@ -1,5 +1,6 @@
 package org.operatorfoundation.audiowave.codec
 
+import org.operatorfoundation.audiowave.codec.codecs.wspr.WsprCodec
 import timber.log.Timber
 
 /**
@@ -36,6 +37,7 @@ class CodecRegistry
     {
         // Register built-in codecs
         // This will be populated as codec implementations are developed
+        registerCodec(WsprCodec())
         Timber.d("CodecRegistry initialized")
     }
 

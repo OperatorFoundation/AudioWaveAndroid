@@ -20,8 +20,6 @@
     <usb-device vendor-id="7373" product-id="26" /> <!-- Common USB sound card -->
 
     <!-- Generic USB Audio Adapters -->
-    <usb-device vendor-id="4292" /> <!-- C-Media based adapters -->
-
     <!-- Icom -->
     <usb-device vendor-id="1427" />
     <!-- Yaesu -->
@@ -29,5 +27,9 @@
     <!-- FTDI (used in many radio interfaces) -->
     <usb-device vendor-id="1027" />
     <!-- Silicon Labs CP210x (common in radio interfaces) -->
-    <usb-device vendor-id="4292" />
+    <usb-device vendor-id="4292" /> <!-- C-Media based adapters -->
+
+    <!-- PJRC Teensy devices -->
+    <usb-device vendor-id="5824" /> <!-- 0x16C0 - PJRC vendor ID -->
+
 </resources>
