@@ -28,6 +28,7 @@ import kotlinx.coroutines.withContext
 import org.operatorfoundation.audiowave.AudioCaptureCallback
 import org.operatorfoundation.audiowave.AudioWaveManager
 import org.operatorfoundation.audiowave.effects.Effect
+import org.operatorfoundation.audiowave.utils.AudioUtils
 import org.operatorfoundation.audiowavedemo.ui.DeviceScreen
 import org.operatorfoundation.audiowavedemo.ui.ProcessingScreen
 import org.operatorfoundation.audiowavedemo.ui.theme.AudioWaveDemoTheme
@@ -169,14 +170,25 @@ class MainActivity : ComponentActivity(), AudioCaptureCallback {
         }
     }
 
-    private fun setupAudioDataCollection() {
+    private fun setupAudioDataCollection()
+    {
         lifecycleScope.launch {
             try {
                 // Collect from the audio flow
                 audioWaveManager.captureFlow().collect { audioData ->
+                    Timber.d("Raw audio data received: ${audioData.size} bytes")
+
+                    // Log first few bytes to see if we're getting data
+                    if (audioData.size >= 8) {
+                        val firstBytes = audioData.take(8).joinToString(" ") { "%02x".format(it) }
+                        Timber.d("First 8 bytes: $firstBytes")
+                    }
+
                     // Update audio level meter
                     val level = calculateAudioLevel(audioData)
-                    Timber.d("Received audio data, level: $level")
+                    val hasData = isAnyAudioDataReceived(audioData)
+
+                    Timber.d("Audio analysis: level=$level, hasData=$hasData")
                     // Update the state on the main thread
                     withContext(Dispatchers.Main) {
                         audioLevel = level
@@ -407,11 +419,19 @@ class MainActivity : ComponentActivity(), AudioCaptureCallback {
     }
 
     // From AudioCaptureCallback interface
-    override fun onAudioDataCaptured(data: ByteArray) {
+    override fun onAudioDataCaptured(data: ByteArray)
+    {
         // Update audio level meter on UI thread
         val level = calculateAudioLevel(data)
+        val hasAnyAudio = isAnyAudioDataReceived(data)
+
         runOnUiThread {
             audioLevel = level
+
+            // Log for debugging
+            if (hasAnyAudio) {
+                Timber.d("Audio data received: ${data.size} bytes, level: $level, hasAudio: $hasAnyAudio")
+            }
         }
     }
 
@@ -423,25 +443,89 @@ class MainActivity : ComponentActivity(), AudioCaptureCallback {
         }
     }
 
-    private fun calculateAudioLevel(data: ByteArray): Float {
+    private fun calculateAudioLevel(data: ByteArray): Float
+    {
+        if (data.isEmpty()) return 0f
+
         // Calculate RMS audio level
         var sum = 0.0
         var count = 0
+        var maxSample = 0.0
+        var minSample = 0.0
 
-        for (i in 0 until data.size - 1 step 2) {
-            if (i + 1 < data.size) {
-                // Convert two bytes to a 16-bit sample
-                val sample = (data[i + 1].toInt() shl 8) or (data[i].toInt() and 0xFF)
-                sum += sample * sample
+        // Convert bytes to 16-bit samples and analyze
+        for (i in 0 until data.size - 1 step 2)
+        {
+            if (i + 1 < data.size)
+            {
+                // Convert two bytes to a 16-bit signed sample
+                val sample = ((data[i + 1].toInt() and 0xFF) shl 8) or (data[i].toInt() and 0xFF)
+                val signedSample = if (sample > 32767) sample - 65536 else sample
+                val normalizedSample = signedSample.toDouble()
+
+                sum += normalizedSample * normalizedSample
+                maxSample = maxOf(maxSample, kotlin.math.abs(normalizedSample))
+                minSample = minOf(minSample, kotlin.math.abs(normalizedSample))
                 count++
             }
         }
 
         if (count == 0) return 0f
 
+        // Calculate multiple metrics for better weak signal detection
         val rms = Math.sqrt(sum / count)
-        // Normalize to 0.0 - 1.0 range (16-bit audio has range -32768 to 32767)
-        return (rms / 32768.0).toFloat()
+        val peak = maxSample
+        val dynamicRange = maxSample - minSample
+
+        // Normalize RMS to 0.0 - 1.0 range (16-bit audio has range -32768 to 32767)
+        val normalizedRMS = (rms / 32768.0).toFloat()
+
+        // For WSPR and other weak signals, use a more sensitive calculation
+        val sensitiveLevel = when {
+            normalizedRMS > 0.1f -> normalizedRMS // Normal audio levels
+            normalizedRMS > 0.001f -> normalizedRMS * 10f // Boost weak signals for display
+            dynamicRange > 100 -> (dynamicRange / 32768.0 * 5).toFloat() // Detect any signal variation
+            else -> 0f
+        }
+
+        // Log details for debugging
+        if (sensitiveLevel > 0.001f) {
+            Timber.d("Audio detected - RMS: $normalizedRMS, Peak: ${peak/32768}, Range: $dynamicRange, Final: $sensitiveLevel")
+        }
+
+        return sensitiveLevel.coerceIn(0f, 1f)
+    }
+
+    // Detect if ANY audio is being received even if it is very quiet
+    private fun isAnyAudioDataReceived(data: ByteArray): Boolean
+    {
+        if (data.isEmpty()) return false
+
+        // Check that data is not just zeros/silence
+        var nonZeroCount = 0
+        var totalVariation = 0.0
+        var previousSample = 0
+
+        for (i in 0 until data.size - 1 step 2)
+        {
+            if (i + 1 < data.size)
+            {
+                val sample = ((data[i + 1].toInt() and 0xFF) shl 8) or (data[i].toInt() and 0xFF)
+
+                if (sample != 0) nonZeroCount++
+
+                // Check for variation between samples (indicate actual audio data)
+                totalVariation += kotlin.math.abs(sample - previousSample)
+                previousSample = sample
+            }
+        }
+
+        val hasNonZeroData = nonZeroCount > (data.size / 4) // At least 25% non-zero
+        val hasVariation = totalVariation > (data.size * 0.1) // Some variation in the signal
+
+        Timber.d("Audio data analysis - NonZero: $nonZeroCount/${data.size/2}, Variation: $totalVariation, HasAudio: ${hasNonZeroData || hasVariation}")
+
+        return hasNonZeroData || hasVariation
     }
 
     override fun onDestroy() {
