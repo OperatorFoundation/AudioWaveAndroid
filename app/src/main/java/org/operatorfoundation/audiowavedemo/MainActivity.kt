@@ -47,6 +47,7 @@ class MainActivity : ComponentActivity(), AudioCaptureCallback {
     private var activeEffects by mutableStateOf<List<Effect>>(emptyList())
     private var showAllUsbDevices by mutableStateOf(false)
     private var isDebugMode by mutableStateOf(false)
+    private var isCollectingAudioData = false
 
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -66,6 +67,9 @@ class MainActivity : ComponentActivity(), AudioCaptureCallback {
     override fun onCreate(savedInstanceState: Bundle?)
     {
         super.onCreate(savedInstanceState)
+
+        // TEMPORARY DEBUG LOG
+        Timber.d("🟢 MainActivity.onCreate() started")
 
         // Test Timber logging
         Timber.d("MainActivity onCreate - Timber is working!")
@@ -92,9 +96,6 @@ class MainActivity : ComponentActivity(), AudioCaptureCallback {
             // Initialize AudioWave library
             initializeAudioWave()
         }
-
-        // Set up audio data collection
-        setupAudioDataCollection()
 
         setContent {
             AudioWaveDemoTheme {
@@ -172,31 +173,67 @@ class MainActivity : ComponentActivity(), AudioCaptureCallback {
 
     private fun setupAudioDataCollection()
     {
+        // Prevent multiple collection coroutines
+        if (isCollectingAudioData) {
+            Timber.d("🟨 Audio data collection already active, skipping setup")
+            return
+        }
+
+        // TEMPORARY DEBUG LOG
+        Timber.d("🟡 setupAudioDataCollection() CALLED")
+
+        isCollectingAudioData = true
+
         lifecycleScope.launch {
-            try {
+            // TEMPORARY DEBUG LOG
+            Timber.d("🟠 Inside lifecycleScope.launch")
+
+            try
+            {
+                Timber.d("🎯 Setting up audio data collection...")
+
                 // Collect from the audio flow
                 audioWaveManager.captureFlow().collect { audioData ->
-                    Timber.d("Raw audio data received: ${audioData.size} bytes")
+                    Timber.d("📊 Flow emitted data: ${audioData.size} bytes")
 
-                    // Log first few bytes to see if we're getting data
-                    if (audioData.size >= 8) {
-                        val firstBytes = audioData.take(8).joinToString(" ") { "%02x".format(it) }
-                        Timber.d("First 8 bytes: $firstBytes")
+                    // Debug logging for received data
+                    if (audioData.isNotEmpty()) {
+                        Timber.d("✅ AUDIO DATA RECEIVED: ${audioData.size} bytes")
+
+                        // Check if data is all zeros (silence)
+                        val nonZeroBytes = audioData.count { it != 0.toByte() }
+                        val hasRealData = nonZeroBytes > (audioData.size * 0.1) // At least 10% non-zero
+
+                        Timber.d("Non-zero bytes: $nonZeroBytes/${audioData.size} (${nonZeroBytes * 100 / audioData.size}%), hasRealData: $hasRealData")
+
+                        if (hasRealData) {
+                            // Show first few bytes
+                            val preview = audioData.take(16).joinToString(" ") { "%02x".format(it.toInt() and 0xFF) }
+                            Timber.d("Data preview: $preview")
+
+                            // Use AudioUtils to calculate RMS
+                            val rmsLevel = AudioUtils.calculateRmsLevel(audioData)
+                            Timber.d("AudioUtils RMS: $rmsLevel")
+                        }
+                    } else {
+                        Timber.v("Empty audio data received")
                     }
 
-                    // Update audio level meter
-                    val level = calculateAudioLevel(audioData)
-                    val hasData = isAnyAudioDataReceived(audioData)
+                    // Calculate audio level and update UI
+                    val level = AudioUtils.calculateDisplayLevel(audioData)
+                    val hasData = AudioUtils.hasAudioSignal(audioData)
 
-                    Timber.d("Audio analysis: level=$level, hasData=$hasData")
+                    Timber.d("Audio analysis: level=$level, hasData=$hasData, size=${audioData.size}")
+
                     // Update the state on the main thread
                     withContext(Dispatchers.Main) {
                         audioLevel = level
                     }
                 }
-            } catch (e: Exception) {
-                Timber.e(e, "Error collecting audio data")
-                // Show a toast with the error
+            }
+            catch (e: Exception)
+            {
+                Timber.e(e, "Error in setupAudioDataCollection")
                 withContext(Dispatchers.Main) {
                     Toast.makeText(
                         this@MainActivity,
@@ -204,6 +241,12 @@ class MainActivity : ComponentActivity(), AudioCaptureCallback {
                         Toast.LENGTH_SHORT
                     ).show()
                 }
+            }
+            finally
+            {
+                // Reset the flag when collection ends
+                isCollectingAudioData = false
+                Timber.d("🔴 Audio data collection ended")
             }
         }
     }
@@ -265,6 +308,9 @@ class MainActivity : ComponentActivity(), AudioCaptureCallback {
                 onSuccess = {
                     connectedDevice = device
                     isProcessingActive = true
+
+                    // Set up data collection after successful connection
+                    setupAudioDataCollection()
 
                     Toast.makeText(
                         this@MainActivity,
@@ -333,6 +379,9 @@ class MainActivity : ComponentActivity(), AudioCaptureCallback {
             audioWaveManager.startCapture(device).fold(
                 onSuccess = {
                     isProcessingActive = true
+
+                    // Set up data collection after starting capture
+                    setupAudioDataCollection()
 
                     Toast.makeText(
                         this@MainActivity,
@@ -422,8 +471,8 @@ class MainActivity : ComponentActivity(), AudioCaptureCallback {
     override fun onAudioDataCaptured(data: ByteArray)
     {
         // Update audio level meter on UI thread
-        val level = calculateAudioLevel(data)
-        val hasAnyAudio = isAnyAudioDataReceived(data)
+        val level = AudioUtils.calculateDisplayLevel(data)
+        val hasAnyAudio = AudioUtils.hasAudioSignal(data)
 
         runOnUiThread {
             audioLevel = level
@@ -441,91 +490,6 @@ class MainActivity : ComponentActivity(), AudioCaptureCallback {
         runOnUiThread {
             decodedData = data
         }
-    }
-
-    private fun calculateAudioLevel(data: ByteArray): Float
-    {
-        if (data.isEmpty()) return 0f
-
-        // Calculate RMS audio level
-        var sum = 0.0
-        var count = 0
-        var maxSample = 0.0
-        var minSample = 0.0
-
-        // Convert bytes to 16-bit samples and analyze
-        for (i in 0 until data.size - 1 step 2)
-        {
-            if (i + 1 < data.size)
-            {
-                // Convert two bytes to a 16-bit signed sample
-                val sample = ((data[i + 1].toInt() and 0xFF) shl 8) or (data[i].toInt() and 0xFF)
-                val signedSample = if (sample > 32767) sample - 65536 else sample
-                val normalizedSample = signedSample.toDouble()
-
-                sum += normalizedSample * normalizedSample
-                maxSample = maxOf(maxSample, kotlin.math.abs(normalizedSample))
-                minSample = minOf(minSample, kotlin.math.abs(normalizedSample))
-                count++
-            }
-        }
-
-        if (count == 0) return 0f
-
-        // Calculate multiple metrics for better weak signal detection
-        val rms = Math.sqrt(sum / count)
-        val peak = maxSample
-        val dynamicRange = maxSample - minSample
-
-        // Normalize RMS to 0.0 - 1.0 range (16-bit audio has range -32768 to 32767)
-        val normalizedRMS = (rms / 32768.0).toFloat()
-
-        // For WSPR and other weak signals, use a more sensitive calculation
-        val sensitiveLevel = when {
-            normalizedRMS > 0.1f -> normalizedRMS // Normal audio levels
-            normalizedRMS > 0.001f -> normalizedRMS * 10f // Boost weak signals for display
-            dynamicRange > 100 -> (dynamicRange / 32768.0 * 5).toFloat() // Detect any signal variation
-            else -> 0f
-        }
-
-        // Log details for debugging
-        if (sensitiveLevel > 0.001f) {
-            Timber.d("Audio detected - RMS: $normalizedRMS, Peak: ${peak/32768}, Range: $dynamicRange, Final: $sensitiveLevel")
-        }
-
-        return sensitiveLevel.coerceIn(0f, 1f)
-    }
-
-    // Detect if ANY audio is being received even if it is very quiet
-    private fun isAnyAudioDataReceived(data: ByteArray): Boolean
-    {
-        if (data.isEmpty()) return false
-
-        // Check that data is not just zeros/silence
-        var nonZeroCount = 0
-        var totalVariation = 0.0
-        var previousSample = 0
-
-        for (i in 0 until data.size - 1 step 2)
-        {
-            if (i + 1 < data.size)
-            {
-                val sample = ((data[i + 1].toInt() and 0xFF) shl 8) or (data[i].toInt() and 0xFF)
-
-                if (sample != 0) nonZeroCount++
-
-                // Check for variation between samples (indicate actual audio data)
-                totalVariation += kotlin.math.abs(sample - previousSample)
-                previousSample = sample
-            }
-        }
-
-        val hasNonZeroData = nonZeroCount > (data.size / 4) // At least 25% non-zero
-        val hasVariation = totalVariation > (data.size * 0.1) // Some variation in the signal
-
-        Timber.d("Audio data analysis - NonZero: $nonZeroCount/${data.size/2}, Variation: $totalVariation, HasAudio: ${hasNonZeroData || hasVariation}")
-
-        return hasNonZeroData || hasVariation
     }
 
     override fun onDestroy() {

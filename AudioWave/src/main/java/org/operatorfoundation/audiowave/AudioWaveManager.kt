@@ -106,81 +106,152 @@ class AudioWaveManager private constructor(private val context: Context)
      * Provides a Flow of captured audio data for reactive processing.
      * This is the preferred way to receive audio data in a reactive application.
      *
+     * Includes circuit breaker pattern to prevent endless error loops.
+     *
      * @return Flow emitting captured audio data
      */
     fun captureFlow(): Flow<ByteArray> = flow {
+        // DEBUG LOGGING to track flow execution
+        Timber.tag(TAG).d("🚀 CAPTURE FLOW STARTED")
+        Timber.tag(TAG).d("  isCapturing: $isCapturing")
+        Timber.tag(TAG).d("  audioCapture: ${audioCapture != null}")
+
         if (!isCapturing) {
-            Timber.w("Attempting to collect from captureFlow when not capturing")
+            Timber.tag(TAG).w("❌ Flow ended: not capturing")
             return@flow
         }
 
         val capture = audioCapture
         if (capture == null) {
-            Timber.e("Audio capture is null despite isCapturing=true")
+            Timber.tag(TAG).e("❌ Flow ended: audioCapture is null")
             return@flow
         }
 
+        Timber.tag(TAG).d("✅ Starting capture loop...")
+        Timber.tag(TAG).d("  audioCapture.isCapturing(): ${capture.isCapturing()}")
+
+        // Circuit breaker variables to prevent endless error loops
         var consecutiveErrors = 0
+        var consecutiveEmptyReads = 0
         val maxConsecutiveErrors = 10
-        val baseDelayMs = 100L
+        val maxConsecutiveEmptyReads = 50 // Allow more empty reads as they're normal
+        val baseDelayMs = 50L
+        var totalBytesRead = 0L
+        var readAttempts = 0L
 
-        try
-        {
-            while (isCapturing && capture.isCapturing())
-            {
+        Timber.tag(TAG).d("Starting audio capture flow with circuit breaker protection")
+
+        try {
+            // DEBUG: Log the loop condition
+            Timber.tag(TAG).d("Loop condition check: isCapturing=$isCapturing, capture.isCapturing()=${capture.isCapturing()}")
+
+            while (isCapturing && capture.isCapturing()) {
+                readAttempts++
+
+                // ADD PERIODIC LOGGING OF LOOP STATUS
+                if (readAttempts % 20 == 0L) { // Every 20 attempts
+                    Timber.tag(TAG).d("🔄 Capture loop iteration $readAttempts")
+                }
+
                 // Read audio data from the USB device
+                Timber.tag(TAG).v("About to call capture.readAudioData()...")
                 val audioDataResult = capture.readAudioData()
+                Timber.tag(TAG).v("capture.readAudioData() returned: ${audioDataResult.isSuccess}")
 
-                if (audioDataResult.isSuccess)
-                {
+                if (audioDataResult.isSuccess) {
                     val audioData = audioDataResult.getOrThrow()
 
-                    // Reset error counter on success
-                    consecutiveErrors = 0
+                    when {
+                        audioData.isNotEmpty() -> {
+                            // Successfully got data - reset all error counters
+                            consecutiveErrors = 0
+                            consecutiveEmptyReads = 0
+                            totalBytesRead += audioData.size
 
-                    // Only process and emit if we have data
-                    if (audioData.isNotEmpty())
-                    {
-                        // Process the audio data through the processing chain
-                        val processedData = processAudioData(audioData)
+                            // Process the audio data through the processing chain
+                            val processedData = processAudioData(audioData)
 
-                        // Notify callback if registered
-                        audioCaptureCallback?.onAudioDataCaptured(processedData)
+                            // Notify callback if registered
+                            audioCaptureCallback?.onAudioDataCaptured(processedData)
 
-                        // Emit the processed data to the flow
-                        emit(processedData)
+                            // Emit the processed data to the flow
+                            emit(processedData)
+
+                            // Small delay to prevent overwhelming the system
+                            delay(5)
+                        }
+
+                        else -> {
+                            // Empty read - this is normal for USB audio, but track it
+                            consecutiveEmptyReads++
+                            consecutiveErrors = 0 // Reset error counter for empty reads
+
+                            if (consecutiveEmptyReads >= maxConsecutiveEmptyReads) {
+                                Timber.tag(TAG).w("Too many consecutive empty reads ($consecutiveEmptyReads), may indicate device issue")
+                                Timber.tag(TAG).d("Total stats: $totalBytesRead bytes in $readAttempts attempts")
+
+                                // Don't break, but add longer delay
+                                delay(100)
+                                consecutiveEmptyReads = 0 // Reset counter
+                            } else {
+                                // Normal empty read delay
+                                delay(10)
+                            }
+                        }
                     }
 
-                    // Small delay to prevent overwhelming the system
-                    delay(10)
+                    // Log statistics periodically
+                    if (readAttempts % 100 == 0L)
+                    {
+                        val avgBytesPerRead = if (readAttempts > 0) totalBytesRead / readAttempts else 0
+                        Timber.tag(TAG).d("Audio capture stats: $totalBytesRead bytes, $readAttempts reads, avg: $avgBytesPerRead bytes/read")
+                    }
+
                 }
                 else
                 {
-                    // Handle error case
+                    // Handle error case with circuit breaker
                     consecutiveErrors++
-
                     val error = audioDataResult.exceptionOrNull()
-                    Timber.e(error, "Error reading audio data")
 
-                    if (consecutiveErrors >= maxConsecutiveErrors)
-                    {
-                        Timber.e("Too many consecutive errors, stopping capture flow")
+                    Timber.tag(TAG).w(error, "Error reading audio data (attempt $consecutiveErrors/$maxConsecutiveErrors)")
+
+                    // Check if we should break the circuit
+                    if (consecutiveErrors >= maxConsecutiveErrors) {
+                        Timber.tag(TAG).e("Circuit breaker activated: Too many consecutive errors ($consecutiveErrors)")
+                        Timber.tag(TAG).e("This usually indicates:")
+                        Timber.tag(TAG).e("  - USB device disconnected")
+                        Timber.tag(TAG).e("  - Device using unsupported endpoint type (isochronous)")
+                        Timber.tag(TAG).e("  - Device not properly configured for audio")
+                        Timber.tag(TAG).e("  - Android USB host limitations")
                         break
                     }
 
-                    // Exponential back off for errors
-                    val delayMs = baseDelayMs * (1 shl minOf(consecutiveErrors - 1, 5))
-                    delay(delayMs) // Wait a short time before retrying
+                    // Exponential backoff for errors (with maximum)
+                    val delayMs = minOf(baseDelayMs * (1 shl minOf(consecutiveErrors - 1, 4)), 1000L)
+                    Timber.tag(TAG).d("Backing off for ${delayMs}ms before retry")
+                    delay(delayMs)
                 }
             }
+
+            Timber.tag(TAG).d("Exited capture loop: isCapturing=$isCapturing, capture.isCapturing()=${capture?.isCapturing()}")
+
         }
         catch (e: Exception)
         {
-            Timber.e(e, "Error in captureFlow")
+            Timber.tag(TAG).e(e, "Unexpected error in captureFlow")
         }
         finally
         {
-            Timber.d("Capture flow ended")
+            val successRate = if (readAttempts > 0) {
+                ((readAttempts - consecutiveErrors) * 100.0 / readAttempts)
+            } else 0.0
+
+            Timber.tag(TAG).d("Capture flow ended:")
+            Timber.tag(TAG).d("  Total bytes: $totalBytesRead")
+            Timber.tag(TAG).d("  Read attempts: $readAttempts")
+            Timber.tag(TAG).d("  Success rate: ${"%.1f".format(successRate)}%")
+            Timber.tag(TAG).d("  Final consecutive errors: $consecutiveErrors")
         }
     }.flowOn(Dispatchers.IO)
 
@@ -244,11 +315,6 @@ class AudioWaveManager private constructor(private val context: Context)
         return decoderRegistry.getCodecInfo(decoderId)
     }
 
-    /**
-     * Get a list of connected USB audio devices.
-     *
-     * @return A list of connected USB audio devices, or empty list if there was an error
-     */
     /**
      * Get a list of connected USB audio devices.
      *

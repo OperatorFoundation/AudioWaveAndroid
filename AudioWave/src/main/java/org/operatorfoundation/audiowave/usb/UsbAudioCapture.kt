@@ -155,10 +155,13 @@ class UsbAudioCapture(private val usbManager: UsbManager, private val device: Us
             val endpoint = usbEndpoint!!
 
             // Log endpoint details for debugging (only occasionally to avoid log spam)
-            if (System.currentTimeMillis() % 1000 < 50) { // Log roughly every 1 second
-                Timber.tag(TAG).v("Reading from endpoint: ${getEndpointTypeString(endpoint.type)} " +
-                        "${if (endpoint.direction == UsbConstants.USB_DIR_IN) "IN" else "OUT"} " +
-                        "(${endpoint.maxPacketSize} bytes)")
+            // ADD THIS DEBUG LOGGING
+            val currentTime = System.currentTimeMillis()
+            if (currentTime % 2000 < 100) { // Log every ~2 seconds
+                Timber.tag(TAG).d("🔍 USB READ ATTEMPT:")
+                Timber.tag(TAG).d("  Endpoint: ${getEndpointTypeString(endpoint.type)} ${if (endpoint.direction == UsbConstants.USB_DIR_IN) "IN" else "OUT"}")
+                Timber.tag(TAG).d("  Max packet: ${endpoint.maxPacketSize}, Buffer: $bufferSize")
+                Timber.tag(TAG).d("  Connection valid: ${conn != null}, Capturing: ${isCapturing.get()}")
             }
 
             // Create a buffer to hold the audio data

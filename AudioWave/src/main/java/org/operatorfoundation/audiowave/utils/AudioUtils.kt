@@ -20,6 +20,59 @@ import java.nio.ByteOrder
  */
 object AudioUtils
 {
+    /**
+     * Calculate audio level suitable for UI display
+     * Combines RMS and peak analysis with sensitivity adjustments
+     */
+    fun calculateDisplayLevel(data: ByteArray): Float
+    {
+        if (data.isEmpty()) return 0f
+
+        // RMS calculation
+        val rmsLevel = calculateRmsLevel(data)
+
+        // Also try peak level for comparison
+        val peakLevel = calculatePeakLevel(data)
+
+        // Log occasionally for debugging (every ~100 calls)
+        if (System.currentTimeMillis() % 5000 < 50) { // Log roughly every 5 seconds
+            Timber.d("Audio levels - RMS: $rmsLevel, Peak: $peakLevel")
+
+            // Show data characteristics
+            val nonZeroCount = data.count { it != 0.toByte() }
+            val dataRange = (data.maxOrNull()?.toInt() ?: 0) - (data.minOrNull()?.toInt() ?: 0)
+            Timber.d("Data analysis - NonZero: $nonZeroCount/${data.size}, Range: $dataRange")
+        }
+
+        // Use RMS as primary level indicator, but boost for display if very quiet
+        return when
+        {
+            rmsLevel > 0.01f -> rmsLevel
+            rmsLevel > 0.001f -> rmsLevel * 5f  // Boost quiet signals for display
+            peakLevel > 0.001f -> peakLevel * 2f  // Use peak if RMS is too quiet
+            else -> 0f
+        }.coerceIn(0f, 1f)
+    }
+
+    /**
+     * Detect if audio data contains any meaningful signal
+     */
+    fun hasAudioSignal(data: ByteArray): Boolean
+    {
+        if (data.isEmpty()) return false
+
+        val rmsLevel = AudioUtils.calculateRmsLevel(data)
+        val peakLevel = AudioUtils.calculatePeakLevel(data)
+
+        // Check for any significant signal
+        val hasSignificantSignal = rmsLevel > 0.0001f || peakLevel > 0.001f
+
+        // Also check for data variation (not all zeros or constant value)
+        val nonZeroCount = data.count { it != 0.toByte() }
+        val hasVariation = nonZeroCount > (data.size * 0.05) // At least 5% non-zero
+
+        return hasSignificantSignal || hasVariation
+    }
 
     /**
      * Convert raw PCM byte data to 16-bit samples.
