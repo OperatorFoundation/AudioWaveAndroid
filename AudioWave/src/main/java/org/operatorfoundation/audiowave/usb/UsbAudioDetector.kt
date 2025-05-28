@@ -4,26 +4,23 @@ import android.hardware.usb.UsbConstants
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbEndpoint
 import android.hardware.usb.UsbInterface
+import android.health.connect.datatypes.Device
 import timber.log.Timber
 
 /**
  * Centralized USB audio device detection and configuration utility.
  *
- * This class uses a progressive strategy approach to maximize compatibility with different
- * types of USB audio devices, from professional audio interfaces to development boards.
+ * This class uses a progressive strategy approach optimized for Android's USB limitations.
+ * Prioritizes Android-compatible endpoints (bulk/interrupt) over isochronous endpoints.
  *
- * The three-strategy approach ensures we find the best possible audio endpoints while
- * maintaining compatibility with both compliant and non-compliant USB audio devices.
- *
- * Basically:
- * High-end devices get the premium treatment (Strategy 1)
- * Standard devices work reliably (Strategy 2)
- * Quirky devices still have a chance (Strategy 3)
- * ;)
+ * Detection Priority:
+ * 1. Bulk endpoints in USB Audio interfaces (most reliable on Android)
+ * 2. Bulk endpoints in any interface (fallback for non-standard devices)
+ * 3. Serial/CDC interfaces (common in development boards)
+ * 4. Isochronous endpoints (likely to fail on Android, last resort)
  */
 object UsbAudioDetector
 {
-
     private const val TAG = "UsbAudioDetector"
 
     // USB Audio Class constants
@@ -41,7 +38,8 @@ object UsbAudioDetector
         val outputEndpoint: UsbEndpoint?,
         val strategy: DetectionStrategy,
         val quality: AudioQuality
-    ) {
+    )
+    {
         /**
          * Get a human-readable description of this configuration
          */
@@ -62,16 +60,21 @@ object UsbAudioDetector
     /**
      * Detection strategy used to find the configuration
      */
-    enum class DetectionStrategy(val displayName: String) {
-        AUDIO_STREAMING("USB Audio Streaming"),
-        AUDIO_CLASS("USB Audio Class"),
+    enum class DetectionStrategy(val displayName: String)
+    {
+        BULK_AUDIO("Bulk Audio (Android Compatible)"),
+        BULK_FALLBACK("Bulk Fallback (Android Compatible)"),
+        SERIAL_AUDIO("Serial Audio (Android Compatible)"),
+        AUDIO_STREAMING("USB Audio Streaming (May Not Work)"),
+        AUDIO_CLASS("USB Audio Class (Mixed Compatibility)"),
         UNIVERSAL_FALLBACK("Universal Fallback")
     }
 
     /**
      * Quality assessment of the found configuration
      */
-    enum class AudioQuality(val displayName: String) {
+    enum class AudioQuality(val displayName: String)
+    {
         PROFESSIONAL("Professional"),  // Isochronous endpoints, Audio Streaming interface
         STANDARD("Standard"),          // Audio Class with reasonable packet sizes
         BASIC("Basic"),               // Small packets or non-standard configuration
@@ -81,21 +84,33 @@ object UsbAudioDetector
     /**
      * Find the best USB audio configuration for a device.
      * Uses progressive strategy to find the most suitable audio setup.
+     * Specifically, an Android-optimized strategy prioritizing compatible endpoints.
      *
      * @param device The USB device to analyze
      * @param logTag Optional tag for logging (defaults to class name)
      * @return AudioConfiguration if found, null if no suitable configuration exists
      */
-    fun findBestAudioConfiguration(device: UsbDevice, logTag: String = TAG): AudioConfiguration? {
+    fun findBestAudioConfiguration(device: UsbDevice, logTag: String = TAG): AudioConfiguration?
+    {
+        Timber.tag(logTag).d("=== USB Audio Detection: ${device.deviceName} ===")
+
         Timber.tag(logTag).d("=== USB Audio Detection: ${device.deviceName} ===")
         Timber.tag(logTag).d("Product: ${device.productName}")
         Timber.tag(logTag).d("Vendor ID: 0x${device.vendorId.toString(16)}")
-        Timber.tag(logTag).d("Analyzing ${device.interfaceCount} interfaces using progressive strategy...")
+        Timber.tag(logTag).d("Analyzing ${device.interfaceCount} interfaces using Android-optimized strategy...")
 
-        // Try each strategy in order of preference
-        findAudioStreamingConfiguration(device, logTag)?.let { return it }
-        findAudioClassConfiguration(device, logTag)?.let { return it }
+        // Priority 1: Android-compatible bulk endpoints in audio interfaces
+        findBulkAudioConfiguration(device, logTag)?.let { return it }
+
+        // Priority 2: Android-compatible bulk endpoints in any interface
         findFallbackConfiguration(device, logTag)?.let { return it }
+
+        // Priority 3: Serial/CDC interfaces that might carry audio
+        findSerialAudioConfiguration(device, logTag)?.let { return it }
+
+        // Priority 4: Isochronous endpoints (may fail)
+        Timber.tag(logTag).w("No bulk endpoints found, trying isochronous (may not work on Android)...")
+        findIsochronousConfiguration(device, logTag)?.let { return it }
 
         Timber.tag(logTag).e("❌ No suitable audio configuration found after trying all strategies")
         return null
@@ -115,11 +130,215 @@ object UsbAudioDetector
     }
 
     // ========================================================================
-    // STRATEGY 1: USB AUDIO STREAMING INTERFACES (Highest Priority)
+    // ANDROID-OPTIMIZED STRATEGIES (Highest Priority)
     // ========================================================================
 
-    private fun findAudioStreamingConfiguration(device: UsbDevice, logTag: String): AudioConfiguration? {
-        Timber.tag(logTag).d("Strategy 1: Looking for USB Audio Streaming interfaces...")
+    // ========================================================================
+    // STRATEGY 1: Bulk Endpoints in USB Audio Interfaces
+    // ========================================================================
+
+    /**
+     * Look for bulk endpoints in USB Audio Class interfaces
+     */
+    private fun findBulkAudioConfiguration(device: UsbDevice, logTag: String): AudioConfiguration? {
+        Timber.tag(logTag).d("Strategy 1: Looking for BULK endpoints in USB Audio interfaces...")
+
+        for (index in 0 until device.interfaceCount) {
+            val intf = device.getInterface(index)
+
+            if (intf.interfaceClass == USB_CLASS_AUDIO) {
+                Timber.tag(logTag).d("  ✓ Found Audio Class interface $index (subclass: ${intf.interfaceSubclass})")
+
+                var inputEndpoint: UsbEndpoint? = null
+                var outputEndpoint: UsbEndpoint? = null
+
+                // Look for BULK endpoints first (Android compatible)
+                for (i in 0 until intf.endpointCount) {
+                    val endpoint = intf.getEndpoint(i)
+                    logEndpoint(endpoint, i, logTag)
+
+                    if (endpoint.type == UsbConstants.USB_ENDPOINT_XFER_BULK) {
+                        if (endpoint.direction == UsbConstants.USB_DIR_IN && endpoint.maxPacketSize >= 64) {
+                            if (inputEndpoint == null || endpoint.maxPacketSize > inputEndpoint.maxPacketSize) {
+                                inputEndpoint = endpoint
+                                Timber.tag(logTag).d("      ★ Selected BULK INPUT endpoint (${endpoint.maxPacketSize} bytes)")
+                            }
+                        } else if (endpoint.direction == UsbConstants.USB_DIR_OUT) {
+                            if (outputEndpoint == null || endpoint.maxPacketSize > outputEndpoint.maxPacketSize) {
+                                outputEndpoint = endpoint
+                                Timber.tag(logTag).d("      ★ Selected BULK OUTPUT endpoint (${endpoint.maxPacketSize} bytes)")
+                            }
+                        }
+                    }
+                }
+
+                // If we found a bulk input endpoint, this is ideal for Android
+                if (inputEndpoint != null) {
+                    val config = AudioConfiguration(
+                        usbInterface = intf,
+                        inputEndpoint = inputEndpoint,
+                        outputEndpoint = outputEndpoint,
+                        strategy = DetectionStrategy.BULK_AUDIO,
+                        quality = AudioQuality.PROFESSIONAL
+                    )
+
+                    Timber.tag(logTag).d("✅ Strategy 1 success (BULK in Audio Class): ${config.getDescription()}")
+                    return config
+                }
+            }
+        }
+
+        return null
+    }
+
+    // ========================================================================
+    // STRATEGY 2: Bulk Endpoints in Any Interfaces
+    // ========================================================================
+    /**
+     * Look for bulk endpoints in any interface that might carry audio
+     */
+    private fun findBulkFallbackConfiguration(device: UsbDevice, logTag: String): AudioConfiguration?
+    {
+        Timber.tag(logTag).d("Strategy 2: Looking for BULK endpoints in any interface...")
+
+        for (index in 0 until device.interfaceCount)
+        {
+            val intf = device.getInterface(index)
+            Timber.tag(logTag).d("  Checking interface $index (class: ${intf.interfaceClass})")
+
+            var inputEndpoint: UsbEndpoint? = null
+            var outputEndpoint: UsbEndpoint? = null
+
+            for (i in 0 until intf.endpointCount)
+            {
+                val endpoint = intf.getEndpoint(i)
+
+                // Look for bulk or interrupt endpoints (both Android compatible)
+                if ((endpoint.type == UsbConstants.USB_ENDPOINT_XFER_BULK ||
+                            endpoint.type == UsbConstants.USB_ENDPOINT_XFER_INT) &&
+                    endpoint.maxPacketSize >= 4)
+                {
+
+                    if (endpoint.direction == UsbConstants.USB_DIR_IN) {
+                        if (inputEndpoint == null || endpoint.maxPacketSize > inputEndpoint.maxPacketSize)
+                        {
+                            inputEndpoint = endpoint
+                            Timber.tag(logTag).d("      ★ Found ${getEndpointTypeString(endpoint.type)} INPUT (${endpoint.maxPacketSize} bytes)")
+                        }
+                    } else if (endpoint.direction == UsbConstants.USB_DIR_OUT)
+                    {
+                        if (outputEndpoint == null || endpoint.maxPacketSize > outputEndpoint.maxPacketSize)
+                        {
+                            outputEndpoint = endpoint
+                            Timber.tag(logTag).d("      ★ Found ${getEndpointTypeString(endpoint.type)} OUTPUT (${endpoint.maxPacketSize} bytes)")
+                        }
+                    }
+                }
+            }
+
+            if (inputEndpoint != null)
+            {
+                val quality = when
+                {
+                    intf.interfaceClass == USB_CLASS_AUDIO -> AudioQuality.STANDARD
+                    inputEndpoint.maxPacketSize >= 256 -> AudioQuality.BASIC
+                    else -> AudioQuality.EXPERIMENTAL
+                }
+
+                val config = AudioConfiguration(
+                    usbInterface = intf,
+                    inputEndpoint = inputEndpoint,
+                    outputEndpoint = outputEndpoint,
+                    strategy = DetectionStrategy.BULK_FALLBACK,
+                    quality = quality
+                )
+
+                Timber.tag(logTag).d("✅ Strategy 2 success (BULK fallback): ${config.getDescription()}")
+                return config
+            }
+        }
+
+        return null
+    }
+
+    // ========================================================================
+    // STRATEGY 3: Serial/CDC interfaces
+    // ========================================================================
+    /**
+     * Look for serial/CDC interfaces that might carry audio data
+     */
+    private fun findSerialAudioConfiguration(device: UsbDevice, logTag: String): AudioConfiguration? {
+        Timber.tag(logTag).d("Strategy 3: Looking for Serial/CDC interfaces...")
+
+        for (index in 0 until device.interfaceCount) {
+            val intf = device.getInterface(index)
+
+            // CDC Data class (10) or Vendor-specific class (255) often used for serial audio
+            if (intf.interfaceClass == 10 || intf.interfaceClass == 255) {
+                Timber.tag(logTag).d("  ✓ Found potential serial interface $index (class: ${intf.interfaceClass})")
+
+                var inputEndpoint: UsbEndpoint? = null
+                var outputEndpoint: UsbEndpoint? = null
+
+                for (i in 0 until intf.endpointCount) {
+                    val endpoint = intf.getEndpoint(i)
+
+                    if (endpoint.type == UsbConstants.USB_ENDPOINT_XFER_BULK) {
+                        if (endpoint.direction == UsbConstants.USB_DIR_IN) {
+                            if (inputEndpoint == null || endpoint.maxPacketSize > inputEndpoint.maxPacketSize) {
+                                inputEndpoint = endpoint
+                                Timber.tag(logTag).d("      ★ Found serial INPUT (${endpoint.maxPacketSize} bytes)")
+                            }
+                        } else if (endpoint.direction == UsbConstants.USB_DIR_OUT) {
+                            if (outputEndpoint == null || endpoint.maxPacketSize > outputEndpoint.maxPacketSize) {
+                                outputEndpoint = endpoint
+                                Timber.tag(logTag).d("      ★ Found serial OUTPUT (${endpoint.maxPacketSize} bytes)")
+                            }
+                        }
+                    }
+                }
+
+                if (inputEndpoint != null) {
+                    val config = AudioConfiguration(
+                        usbInterface = intf,
+                        inputEndpoint = inputEndpoint,
+                        outputEndpoint = outputEndpoint,
+                        strategy = DetectionStrategy.SERIAL_AUDIO,
+                        quality = AudioQuality.BASIC
+                    )
+
+                    Timber.tag(logTag).d("✅ Strategy 3 success (Serial/CDC): ${config.getDescription()}")
+                    return config
+                }
+            }
+        }
+
+        return null
+    }
+
+    // ========================================================================
+    // STRATEGY 4: USB AUDIO STREAMING INTERFACES (Lowest Priority)
+    // ========================================================================
+    /**
+     * Look for isochronous endpoints as last resort
+     *
+     * Android does not natively support isochronous endpoints for USB audio.
+     * The Android USB Host API, as of API Level 12, does not provide functionality to interact with isochronous endpoints,
+     * which are essential for real-time audio streaming.
+     * The UsbEndpoint class, part of the Android SDK, lacks support for isochronous endpoints.
+     * https://www.devdoc.net/android/Android-r15/reference/android/hardware/usb/UsbEndpoint.html
+     *
+     * While Android does support the USB Audio Class (UAC) for audio playback over USB,
+     * this support is primarily for output devices in host mode.
+     * Input audio devices, such as microphones, are generally not supported in host mode.
+     * This is due to a lack of isochronous endpoint support, ideal for handling continuous audio streams .
+     * https://source.android.com/docs/compatibility/8.0/android-8.0-cdd
+     *
+     * Android's lack of support for isochronous endpoints significantly hinders its ability to handle USB audio input effectively.
+     */
+    private fun findIsochronousConfiguration(device: UsbDevice, logTag: String): AudioConfiguration? {
+        Timber.tag(logTag).d("Strategy 4: Looking for ISOCHRONOUS endpoints (last resort)...")
+        Timber.tag(logTag).w("⚠️ ISOCHRONOUS endpoints are not well supported on Android!")
 
         var bestConfig: AudioConfiguration? = null
 
@@ -183,7 +402,7 @@ object UsbAudioDetector
     }
 
     // ========================================================================
-    // STRATEGY 2: ANY USB AUDIO CLASS INTERFACE (Medium Priority)
+    // STRATEGY: ANY USB AUDIO CLASS INTERFACE (Medium Priority)
     // ========================================================================
 
     private fun findAudioClassConfiguration(device: UsbDevice, logTag: String): AudioConfiguration? {
@@ -245,7 +464,7 @@ object UsbAudioDetector
     }
 
     // ========================================================================
-    // STRATEGY 3: UNIVERSAL FALLBACK (Lowest Priority)
+    // STRATEGY: UNIVERSAL FALLBACK (Lowest Priority)
     // ========================================================================
 
     private fun findFallbackConfiguration(device: UsbDevice, logTag: String): AudioConfiguration? {

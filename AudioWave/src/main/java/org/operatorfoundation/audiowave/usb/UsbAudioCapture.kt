@@ -7,6 +7,7 @@ import kotlinx.coroutines.withContext
 import org.operatorfoundation.audiowave.exception.AudioException
 import org.operatorfoundation.audiowave.utils.ErrorHandler
 import timber.log.Timber
+import java.nio.Buffer
 import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -145,30 +146,149 @@ class UsbAudioCapture(private val usbManager: UsbManager, private val device: Us
     suspend fun readAudioData(): Result<ByteArray> = withContext(Dispatchers.IO)
     {
         return@withContext ErrorHandler.runCatching {
-            if (!isCapturing.get() || connection == null || usbEndpoint == null) {
+            if (!isCapturing.get() || connection == null || usbEndpoint == null)
+            {
                 throw AudioException.AudioProcessingException("Not in capture state")
             }
 
             val conn = connection!!
             val endpoint = usbEndpoint!!
 
+            // Log endpoint details for debugging (only occasionally to avoid log spam)
+            if (System.currentTimeMillis() % 1000 < 50) { // Log roughly every 1 second
+                Timber.tag(TAG).v("Reading from endpoint: ${getEndpointTypeString(endpoint.type)} " +
+                        "${if (endpoint.direction == UsbConstants.USB_DIR_IN) "IN" else "OUT"} " +
+                        "(${endpoint.maxPacketSize} bytes)")
+            }
+
             // Create a buffer to hold the audio data
             val buffer = ByteBuffer.allocate(bufferSize)
 
             // Read from the USB endpoint
-            val bytesRead = conn.bulkTransfer(
-                endpoint,
-                buffer.array(),
-                buffer.capacity(),
-                1000 // 1 second timeout
-            )
-
-            if (bytesRead <= 0) {
-                throw AudioException.AudioProcessingException("Failed to read audio data: $bytesRead")
+            // Try appropriate transfer method based on endpoint type
+            val bytesRead = when (endpoint.type)
+            {
+                UsbConstants.USB_ENDPOINT_XFER_BULK ->
+                {
+                    // Standard bulk transfer
+                    conn.bulkTransfer(endpoint, buffer.array(), buffer.capacity(), 100)
+                }
+                UsbConstants.USB_ENDPOINT_XFER_INT ->
+                {
+                    // Interrupt transfer (use bulk transfer API)
+                    conn.bulkTransfer(endpoint, buffer.array(), buffer.capacity(), 50) // Shorter timeout for interrupt
+                }
+                UsbConstants.USB_ENDPOINT_XFER_ISOC -> {
+                    // ISOCHRONOUS transfer - Android limitation, try fallback strategies
+                    Timber.tag(TAG).v("⚠️ ISOCHRONOUS endpoint - using fallback strategies")
+                    handleIsochronousEndpoint(conn, endpoint, buffer)
+                }
+                else ->
+                {
+                    throw AudioException.AudioProcessingException(
+                        "Unsupported endpoint type: ${getEndpointTypeString(endpoint.type)} (${endpoint.type})"
+                    )
+                }
             }
 
-            // Return the audio data
-            return@runCatching buffer.array().copyOf(bytesRead)
+            // Process the result
+            when
+            {
+                bytesRead < 0 ->
+                {
+                    val errorMsg = when (bytesRead)
+                    {
+                        -1 -> "USB timeout or device disconnected"
+                        -2 -> "USB pipe error - device may be in wrong mode"
+                        -3 -> "USB endpoint stall - device configuration issue"
+                        -4 -> "USB overflow - buffer too small"
+                        else -> "USB transfer error: $bytesRead"
+                    }
+
+                    // For isochronous endpoints, timeouts are expected - return empty instead of error
+                    if (endpoint.type == UsbConstants.USB_ENDPOINT_XFER_ISOC && bytesRead == -1)
+                    {
+                        Timber.tag(TAG).v("Isochronous timeout (expected on Android)")
+                        return@runCatching ByteArray(0)
+                    }
+
+                    throw AudioException.AudioProcessingException(errorMsg)
+                }
+                bytesRead == 0 ->
+                {
+                    // No data available - return empty array instead of error
+                    return@runCatching ByteArray(0)
+                }
+                else ->
+                {
+                    // Success - return the audio data
+                    if (System.currentTimeMillis() % 5000 < 50) // Log every ~5 seconds
+                    {
+                        Timber.tag(TAG).v("Successfully read $bytesRead bytes from USB endpoint")
+                    }
+                    return@runCatching buffer.array().copyOf(bytesRead)
+                }
+            }
+        }
+    }
+
+    /**
+     * Handle isochronous endpoints with multiple fallback strategies
+     * This attempts to work around Android's lack of isochronous support
+     */
+    private fun handleIsochronousEndpoint(
+        conn: UsbDeviceConnection,
+        endpoint: UsbEndpoint,
+        buffer: ByteBuffer
+    ): Int
+    {
+        // Strategy 1: Try very small packets with short timeout
+        try {
+            val smallSize = minOf(endpoint.maxPacketSize, 64)
+            val result = conn.bulkTransfer(endpoint, buffer.array(), smallSize, 10)
+            if (result > 0) {
+                return result
+            }
+        } catch (e: Exception) {
+            // Ignore and try next strategy
+        }
+
+        // Strategy 2: Try single packet size with minimal timeout
+        try {
+            val result = conn.bulkTransfer(endpoint, buffer.array(), endpoint.maxPacketSize, 5)
+            if (result > 0) {
+                return result
+            }
+        } catch (e: Exception) {
+            // Ignore and try next strategy
+        }
+
+        // Strategy 3: Try minimal read (just a few bytes)
+        try {
+            val result = conn.bulkTransfer(endpoint, buffer.array(), 8, 1)
+            if (result > 0) {
+                return result
+            }
+        } catch (e: Exception) {
+            // Ignore - all strategies failed
+        }
+
+        // All strategies failed - return -1 (timeout)
+        return -1
+    }
+
+    /**
+     * Get endpoint type as a String for logging
+     */
+    private fun getEndpointTypeString(type: Int): String
+    {
+        return when (type)
+        {
+            UsbConstants.USB_ENDPOINT_XFER_CONTROL -> "CONTROL"
+            UsbConstants.USB_ENDPOINT_XFER_ISOC -> "ISOCHRONOUS"
+            UsbConstants.USB_ENDPOINT_XFER_BULK -> "BULK"
+            UsbConstants.USB_ENDPOINT_XFER_INT -> "INTERRUPT"
+            else -> "UNKNOWN($type)"
         }
     }
 

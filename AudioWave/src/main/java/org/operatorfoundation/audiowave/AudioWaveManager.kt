@@ -120,32 +120,67 @@ class AudioWaveManager private constructor(private val context: Context)
             return@flow
         }
 
-        try {
-            while (isCapturing && capture.isCapturing()) {
+        var consecutiveErrors = 0
+        val maxConsecutiveErrors = 10
+        val baseDelayMs = 100L
+
+        try
+        {
+            while (isCapturing && capture.isCapturing())
+            {
                 // Read audio data from the USB device
                 val audioDataResult = capture.readAudioData()
 
-                if (audioDataResult.isSuccess) {
+                if (audioDataResult.isSuccess)
+                {
                     val audioData = audioDataResult.getOrThrow()
 
-                    // Process the audio data through the processing chain
-                    val processedData = processAudioData(audioData)
+                    // Reset error counter on success
+                    consecutiveErrors = 0
 
-                    // Notify callback if registered
-                    audioCaptureCallback?.onAudioDataCaptured(processedData)
+                    // Only process and emit if we have data
+                    if (audioData.isNotEmpty())
+                    {
+                        // Process the audio data through the processing chain
+                        val processedData = processAudioData(audioData)
 
-                    // Emit the processed data to the flow
-                    emit(processedData)
-                } else {
+                        // Notify callback if registered
+                        audioCaptureCallback?.onAudioDataCaptured(processedData)
+
+                        // Emit the processed data to the flow
+                        emit(processedData)
+                    }
+
+                    // Small delay to prevent overwhelming the system
+                    delay(10)
+                }
+                else
+                {
                     // Handle error case
+                    consecutiveErrors++
+
                     val error = audioDataResult.exceptionOrNull()
                     Timber.e(error, "Error reading audio data")
-                    delay(100) // Wait a short time before retrying
-                    // No continue needed - loop will naturally continue
+
+                    if (consecutiveErrors >= maxConsecutiveErrors)
+                    {
+                        Timber.e("Too many consecutive errors, stopping capture flow")
+                        break
+                    }
+
+                    // Exponential back off for errors
+                    val delayMs = baseDelayMs * (1 shl minOf(consecutiveErrors - 1, 5))
+                    delay(delayMs) // Wait a short time before retrying
                 }
             }
-        } catch (e: Exception) {
+        }
+        catch (e: Exception)
+        {
             Timber.e(e, "Error in captureFlow")
+        }
+        finally
+        {
+            Timber.d("Capture flow ended")
         }
     }.flowOn(Dispatchers.IO)
 
