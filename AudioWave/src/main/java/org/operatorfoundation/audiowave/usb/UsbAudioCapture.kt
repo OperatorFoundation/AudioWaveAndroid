@@ -245,38 +245,49 @@ class UsbAudioCapture(private val usbManager: UsbManager, private val device: Us
         buffer: ByteBuffer
     ): Int
     {
-        // Strategy 1: Try very small packets with short timeout
+        Timber.tag(TAG).d("Trying enhanced isochronous strategies for ${endpoint.maxPacketSize}-byte endpoint")
+
+        // Strategy 1: Try exact packet size with very short timeout
         try {
-            val smallSize = minOf(endpoint.maxPacketSize, 64)
-            val result = conn.bulkTransfer(endpoint, buffer.array(), smallSize, 10)
+            val result = conn.bulkTransfer(endpoint, buffer.array(), endpoint.maxPacketSize, 1)
             if (result > 0) {
+                Timber.tag(TAG).d("✅ Isochronous strategy 1 worked: $result bytes")
                 return result
             }
-        } catch (e: Exception) {
-            // Ignore and try next strategy
-        }
+        } catch (e: Exception) { /* ignore */ }
 
-        // Strategy 2: Try single packet size with minimal timeout
+        // Strategy 2: Try half packet size
         try {
-            val result = conn.bulkTransfer(endpoint, buffer.array(), endpoint.maxPacketSize, 5)
+            val halfSize = endpoint.maxPacketSize / 2
+            val result = conn.bulkTransfer(endpoint, buffer.array(), halfSize, 1)
             if (result > 0) {
+                Timber.tag(TAG).d("✅ Isochronous strategy 2 worked: $result bytes")
                 return result
             }
-        } catch (e: Exception) {
-            // Ignore and try next strategy
+        } catch (e: Exception) { /* ignore */ }
+
+        // Strategy 3: Try very small chunks with zero timeout
+        for (size in listOf(64, 32, 16, 8, 4)) {
+            try {
+                val result = conn.bulkTransfer(endpoint, buffer.array(), size, 0)
+                if (result > 0) {
+                    Timber.tag(TAG).d("✅ Isochronous strategy 3 worked with $size bytes: $result bytes")
+                    return result
+                }
+            } catch (e: Exception) { /* ignore */ }
         }
 
-        // Strategy 3: Try minimal read (just a few bytes)
+        // Strategy 4: Try with different buffer allocation
         try {
-            val result = conn.bulkTransfer(endpoint, buffer.array(), 8, 1)
+            val smallBuffer = ByteArray(endpoint.maxPacketSize)
+            val result = conn.bulkTransfer(endpoint, smallBuffer, smallBuffer.size, 1)
             if (result > 0) {
+                System.arraycopy(smallBuffer, 0, buffer.array(), 0, result)
+                Timber.tag(TAG).d("✅ Isochronous strategy 4 worked: $result bytes")
                 return result
             }
-        } catch (e: Exception) {
-            // Ignore - all strategies failed
-        }
+        } catch (e: Exception) { /* ignore */ }
 
-        // All strategies failed - return -1 (timeout)
         return -1
     }
 
