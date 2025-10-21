@@ -19,6 +19,6 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "AudioWaveDemo"
+rootProject.name = "AudioWaveAndroid"
 include(":app")
 include(":AudioWave")
